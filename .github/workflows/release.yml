@@ -1,0 +1,82 @@
+name: Release
+
+# Fires on a version tag (v1.0.0, v1.0.1, ...). Nothing runs until that tag
+# is pushed — see packaging/ and CHANGELOG.md for the release checklist.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tk __version__ matches the tag
+        run: |
+          tk_version=$(grep -m1 '^__version__' tk | sed -E 's/__version__ = "(.*)"/\1/')
+          if [ "$tk_version" != "${{ steps.version.outputs.version }}" ]; then
+            echo "tk __version__ ($tk_version) != tag (${{ steps.version.outputs.version }})" >&2
+            exit 1
+          fi
+
+      - name: Verify pyproject.toml version matches the tag
+        run: |
+          py_version=$(grep -m1 '^version' pyproject.toml | sed -E 's/version = "(.*)"/\1/')
+          if [ "$py_version" != "${{ steps.version.outputs.version }}" ]; then
+            echo "pyproject.toml version ($py_version) != tag (${{ steps.version.outputs.version }})" >&2
+            exit 1
+          fi
+
+      - name: Checksum the release binary
+        run: sha256sum tk > tk.sha256
+
+      - name: Extract this version's changelog section
+        run: |
+          awk '/^## \[${{ steps.version.outputs.version }}\]/{flag=1;next}/^## \[/{flag=0}flag' \
+            CHANGELOG.md > release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            tk
+            tk.sha256
+          body_path: release-notes.md
+
+      # PyPI publish only runs once a PYPI_API_TOKEN repo secret exists —
+      # see the human checklist in the worker's outbox message for how to
+      # create it. Skipped silently otherwise so this workflow doesn't fail
+      # a release over a step nobody has configured yet.
+      - name: Check for a PyPI token
+        id: pypi
+        run: echo "has_token=${{ secrets.PYPI_API_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        if: steps.pypi.outputs.has_token == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Build sdist and wheel
+        if: steps.pypi.outputs.has_token == 'true'
+        run: |
+          python3 -m pip install --upgrade build
+          python3 -m build
+
+      - name: Publish to PyPI
+        if: steps.pypi.outputs.has_token == 'true'
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          python3 -m pip install --upgrade twine
+          python3 -m twine upload dist/*
