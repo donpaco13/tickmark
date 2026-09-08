@@ -101,3 +101,9 @@ Python 3.6+. No packages. Works anywhere a shell does.
 ## License
 
 MIT
+
+## Status lines
+
+Ready-made snippets for Claude Code, starship, tmux and powerlevel10k, all
+reading `roots.json` directly with no `git`/`tk` call per repaint: see
+[`integrations/`](integrations/).
