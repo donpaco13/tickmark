@@ -5,11 +5,11 @@
 You can't tell where your agent is. It's mid-task, the terminal is a wall of
 scrolling text, and the only status update arrives as a summary once the work
 is already done. Agents that ship a native todo tool don't have this problem:
-they render a live checklist you can glance at. Most do now; the table
-below says which.
+they render a live checklist you can glance at. Most do now — the table below
+says which. Some still don't, and that's where you're flying blind.
 
-`tk` gives them one anyway. No API, no daemon, no plugin system: one Python
-file with no dependencies, called as a shell command.
+`tk` gives those one. No API, no daemon, no plugin system: one Python file
+with no dependencies, called as a shell command.
 
 ## Install
 
