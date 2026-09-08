@@ -5,7 +5,8 @@
 You can't tell where your agent is. It's mid-task, the terminal is a wall of
 scrolling text, and the only status update arrives as a summary once the work
 is already done. Agents that ship a native todo tool don't have this problem:
-they render a live checklist you can glance at. Most agents don't ship one.
+they render a live checklist you can glance at. Most do now; the table
+below says which.
 
 `tk` gives them one anyway. No API, no daemon, no plugin system: one Python
 file with no dependencies, called as a shell command.
@@ -20,15 +21,29 @@ cd tickmark && ./install.sh
 This copies `tk` to `~/.local/bin` and tells you which agent instruction files
 it found. Then append [`AGENTS.md`](AGENTS.md) to the one your agent reads:
 
-| Agent | Instruction file | Native checklist? |
-| --- | --- | --- |
-| Antigravity CLI (`agy`) | `AGENTS.md` | no — `tk` is for this |
-| Codex | `~/.codex/AGENTS.md` or `./AGENTS.md` | untested |
-| Crush | `~/.config/crush/CRUSH.md` | untested |
-| anything else | whatever file it loads at startup | check first |
+| Agent | Instruction file | Native checklist? | Source |
+| --- | --- | --- | --- |
+| Antigravity CLI (`agy`) | `AGENTS.md` | no — `tk` is for this | its `init` event lists 57 tools, none a checklist |
+| Aider | `CONVENTIONS.md`, loaded with `--read` | no — no todo tool, no todo command | [in-chat commands](https://aider.chat/docs/usage/commands.html) |
+| Amp | `AGENTS.md` | no — had TODOs since mid-2025, removed them on 12 Jan 2026 | [TODOs Are Done](https://ampcode.com/news/todos-are-done) |
+| Cline CLI | `.clinerules/` | no — Focus Chain ships in the VS Code extension, not the CLI | [focus-chain lives under `apps/vscode`](https://github.com/cline/cline/tree/main/apps/vscode/src/core/task/focus-chain) |
+| Goose | `.goosehints` or `AGENTS.md` | no — platform extensions stop at analyze, developer, memory, orchestrator | [`platform_extensions/`](https://github.com/block/goose/tree/main/crates/goose/src/agents/platform_extensions) |
+| Cursor CLI (`cursor-agent`) | `AGENTS.md` or `.cursor/rules` | unclear — the agent sends `cursor/update_todos` over ACP, but nothing says its own TUI draws them | [ACP reference](https://cursor.com/docs/cli/acp) |
+| GitHub Copilot CLI | `AGENTS.md` or `.github/copilot-instructions.md` | unclear — plan mode is documented, a live checklist is not; release notes mention a todo count in the autopilot goal panel | [v1.0.81 release notes](https://github.com/github/copilot-cli/releases/tag/v1.0.81) |
+| Claude Code | — | yes — `TaskCreate`/`TaskUpdate` | ships with the CLI |
+| Codex | — | yes — `update_plan`, drawn as "Updated Plan" | [`plan_tool.rs`](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/plan_tool.rs) |
+| Continue CLI (`cn`) | — | yes — `writeChecklist` | [`ChecklistDisplay.tsx`](https://github.com/continuedev/continue/blob/main/extensions/cli/src/ui/components/ChecklistDisplay.tsx) |
+| Crush | — | yes — todos tool with its own TUI renderer | [`ui/chat/todos.go`](https://github.com/charmbracelet/crush/blob/main/internal/ui/chat/todos.go) |
+| Droid (Factory) | — | yes — `todoDisplayMode` setting | [Droid CLI settings](https://docs.factory.ai/droid-cli/settings) |
+| Gemini CLI | — | yes — `write_todos`, full list on Ctrl+T | [todos.md](https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/todos.md) |
+| Kilo Code TUI | — | yes — `todowrite`, sidebar list | [`sidebar/todo.tsx`](https://github.com/Kilo-Org/kilocode/blob/main/packages/tui/src/feature-plugins/sidebar/todo.tsx) |
+| opencode | — | yes — `todowrite`/`todoread` | 148 hits in the binary; its system prompt asks for them "VERY frequently" |
+| Qwen Code | — | yes — `todo_write` with a sticky list | [todo-write.md](https://github.com/QwenLM/qwen-code/blob/main/docs/developers/tools/todo-write.md) |
+| Roo Code CLI | — | yes — `update_todo_list` | [`TodoDisplay.tsx`](https://github.com/RooCodeInc/Roo-Code/blob/main/apps/cli/src/ui/components/TodoDisplay.tsx) |
+| anything else | whatever file it loads at startup | check first | — |
 
-Claude Code and opencode already ship one (`TaskCreate`/`TaskUpdate` and
-`todowrite`/`todoread`). Use theirs — `tk` has nothing to add there.
+Where the answer is yes, use the agent's own tool. `tk` has nothing to add
+there. Windsurf is an IDE, not a CLI agent, so there is nothing to append.
 
 That's the whole integration. The agent already knows how to run shell
 commands — it just needs to be told that this one exists.
