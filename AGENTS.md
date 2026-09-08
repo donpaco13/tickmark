@@ -1,30 +1,27 @@
 # Session task tracking
 
-You do not have a native todo tool in this CLI. Use `tk` instead — it prints a
-live checklist in the terminal so the person watching can see where the work is,
-instead of a wall of text and a summary at the end.
-
-**Whenever a task takes more than one step, lay the steps out before starting.**
-Do not wait to be asked, and do not replace the checklist with a narrated recap
-at the end of your answer.
+**Before doing anything else on a task with more than one step, run `tk add` with
+the steps.** Then keep it current as you go. This is the checklist the person
+watching reads to see where the work is; a narrated recap at the end does not
+replace it.
 
 ```
-tk add "<step>" "<step>" "<step>"   lay out the steps up front
+tk add "<step>" "<step>" "<step>"   lay out the steps, before starting work
 tk go <n>                           when you start step n
 tk ok <n>                           when step n is genuinely finished
 tk next                             finish the current step and start the next
 tk                                  reprint the list
 ```
 
-Every command reprints the whole list, so one call both records the change and
-shows the state — never call `tk` twice in a row to check your own work.
-
 Rules:
 
+- **Give `tk` its own command. Never chain it with `&&`, and never bundle
+  several `tk` calls into one command** — a checklist that jumps three steps at
+  once shows nothing. One call, one state change, one redraw.
+- Mark a step done after the work is done, never in the same command that does it.
 - One step in progress at a time.
-- Mark a step done only when it is actually done, not when you plan to do it.
+- If this CLI already prints a live checklist of its own, use that instead and
+  ignore this file.
 - The list is per project. Several agents in one checkout share it unless
-  whoever launches them sets TICKMARK_SESSION to something different for each
-  (`TICKMARK_SESSION=$AGENT_ID`, for instance).
-- It is a progress display, not a backlog: it does not replace whatever issue
-  tracker the project uses.
+  whoever launches them sets `TICKMARK_SESSION` differently for each. It is a
+  progress display, not a backlog.
