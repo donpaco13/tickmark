@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""tickmark (tk) - session task tracker for agent CLIs with no native todo tool.
+
+Why this exists
+---------------
+Coding agents that ship a todo tool render a live checklist in the terminal, so
+the human watching can see where the work is. Agents that don't ship one leave
+the human with a wall of scrolling text and a summary at the very end.
+
+tk gives that checklist back, to any agent, without an API, a daemon or a
+plugin system: it is a single Python file with no dependencies that any agent
+can call as a shell command.
+
+Design notes
+------------
+- State lives in one JSON file per project (git root when there is one, current
+  directory otherwise), so two projects never share a list.
+- Every command reprints the full list. One call both updates the state and
+  shows where things stand, which is exactly one tool call for the agent.
+- The state file is plain JSON on purpose: a status line, a prompt hook or
+  another tool can read it without going through tk.
+"""
+import hashlib
+import json
+import os
+import subprocess
+import sys
+
+__version__ = "1.0.0"
+
+HOME = os.path.expanduser("~")
+XDG = os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local", "share")
+STORE = os.environ.get("TICKMARK_STORE") or os.path.join(XDG, "tickmark")
+LEGACY_STORE = os.path.join(HOME, ".local", "share", "agy-tasks")
+
+MARK = {"todo": "○", "doing": "▸", "done": "✔"}
+
+# The display language follows the shell locale. The agent-facing contract
+# (command names, JSON keys) never changes, so instructions stay portable.
+FR = (os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES")
+      or os.environ.get("LANG") or "").lower().startswith("fr")
+
+STRINGS = {
+    "empty": ("Aucune tache. tk add \"<sujet>\" pour commencer.",
+              "No tasks yet. tk add \"<subject>\" to start."),
+    "count": ("Taches %d/%d", "Tasks %d/%d"),
+    "need_subject": ("tk add attend au moins un sujet entre guillemets.",
+                     "tk add expects at least one quoted subject."),
+    "need_number": ("tk %s attend le numero d'une tache existante.",
+                    "tk %s expects the number of an existing task."),
+    "unknown": ("Commande inconnue : %s", "Unknown command: %s"),
+}
+
+USAGE = """tickmark %s - session task tracker
+
+  tk add "<subject>" ["<subject>" ...]   add one or more tasks
+  tk go <n>                              mark task n as in progress
+  tk ok <n> [<n> ...]                    complete one or more tasks
+  tk next                                complete the current task, start the next
+  tk rm <n> [<n> ...]                    remove one or more tasks
+  tk new                                 clear the list
+  tk                                     show the list
+  tk --json                              show the list as JSON (for status lines)
+
+State: %s
+""" % (__version__, STORE)
+
+
+def s(key, *args):
+    text = STRINGS[key][0 if FR else 1]
+    return text % args if args else text
+
+
+def project_root():
+    """The git root when there is one, the working directory otherwise."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return os.getcwd()
+
+
+def remember_root(cwd, root):
+    """Record working directory -> project root.
+
+    A status line can then find the right list without shelling out to git on
+    every repaint. Written atomically: several agents may run at once.
+    """
+    p = os.path.join(STORE, "roots.json")
+    try:
+        with open(p) as f:
+            roots = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        roots = {}
+    if roots.get(cwd) == root:
+        return
+    roots[cwd] = root
+    tmp = "%s.%d.tmp" % (p, os.getpid())
+    try:
+        with open(tmp, "w") as f:
+            json.dump(roots, f)
+        os.replace(tmp, p)
+    except OSError:
+        pass
+
+
+def state_path():
+    root = project_root()
+    os.makedirs(STORE, exist_ok=True)
+    remember_root(os.getcwd(), root)
+    name = hashlib.sha1(root.encode()).hexdigest()[:16] + ".json"
+    path = os.path.join(STORE, name)
+    # One-shot migration from the pre-1.0 store, so an existing list is not
+    # silently lost the day someone installs tickmark over it.
+    if not os.path.exists(path):
+        legacy = os.path.join(LEGACY_STORE, name)
+        if os.path.exists(legacy):
+            try:
+                with open(legacy) as src, open(path, "w") as dst:
+                    dst.write(src.read())
+            except OSError:
+                pass
+    return path
+
+
+def load():
+    p = state_path()
+    if not os.path.exists(p):
+        return []
+    try:
+        with open(p) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def save(tasks):
+    with open(state_path(), "w") as f:
+        json.dump(tasks, f, ensure_ascii=False)
+
+
+def render(tasks):
+    if not tasks:
+        return s("empty")
+    done = sum(1 for t in tasks if t["s"] == "done")
+    lines = [s("count", done, len(tasks))]
+    for i, t in enumerate(tasks, 1):
+        lines.append("%s %d %s" % (MARK[t["s"]], i, t["t"]))
+    return "\n".join(lines)
+
+
+def pick(tasks, args):
+    """Turn arguments into valid indices, ignoring anything else."""
+    out = []
+    for a in args:
+        if a.isdigit() and 1 <= int(a) <= len(tasks):
+            out.append(int(a) - 1)
+    return out
+
+
+def main():
+    argv = sys.argv[1:]
+    cmd = argv[0] if argv else "ls"
+    rest = argv[1:]
+
+    if cmd in ("-h", "--help", "help"):
+        print(USAGE, end="")
+        return 0
+    if cmd in ("-V", "--version"):
+        print("tickmark %s" % __version__)
+        return 0
+
+    tasks = load()
+
+    if cmd == "--json":
+        print(json.dumps(tasks, ensure_ascii=False))
+        return 0
+
+    if cmd == "add":
+        subjects = [x.strip() for x in rest if x.strip()]
+        if not subjects:
+            print(s("need_subject"), file=sys.stderr)
+            return 1
+        tasks += [{"t": x, "s": "todo"} for x in subjects]
+    elif cmd == "go":
+        idx = pick(tasks, rest)
+        if not idx:
+            print(s("need_number", "go"), file=sys.stderr)
+            return 1
+        for t in tasks:
+            if t["s"] == "doing":
+                t["s"] = "todo"
+        tasks[idx[0]]["s"] = "doing"
+    elif cmd == "ok":
+        idx = pick(tasks, rest)
+        if not idx:
+            print(s("need_number", "ok"), file=sys.stderr)
+            return 1
+        for i in idx:
+            tasks[i]["s"] = "done"
+    elif cmd == "next":
+        for t in tasks:
+            if t["s"] == "doing":
+                t["s"] = "done"
+        for t in tasks:
+            if t["s"] == "todo":
+                t["s"] = "doing"
+                break
+    elif cmd == "rm":
+        idx = pick(tasks, rest)
+        if not idx:
+            print(s("need_number", "rm"), file=sys.stderr)
+            return 1
+        drop = set(idx)
+        tasks = [t for i, t in enumerate(tasks) if i not in drop]
+    elif cmd == "new":
+        tasks = []
+    elif cmd != "ls":
+        print(s("unknown", cmd) + "\n", file=sys.stderr)
+        print(USAGE, end="", file=sys.stderr)
+        return 1
+
+    save(tasks)
+    print(render(tasks))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
