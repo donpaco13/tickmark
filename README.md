@@ -74,6 +74,12 @@ display for the human in the loop. If you want your agent to keep durable state
 across sessions, use a real tracker; if you want to see what it's doing right
 now, use this.
 
+## Status lines
+
+Ready-made snippets for Claude Code, starship, tmux and powerlevel10k, all
+reading `roots.json` directly with no `git`/`tk` call per repaint: see
+[`integrations/`](integrations/).
+
 ## Requirements
 
 Python 3.6+. No packages. Works anywhere a shell does.
@@ -81,9 +87,3 @@ Python 3.6+. No packages. Works anywhere a shell does.
 ## License
 
 MIT
-
-## Status lines
-
-Ready-made snippets for Claude Code, starship, tmux and powerlevel10k, all
-reading `roots.json` directly with no `git`/`tk` call per repaint: see
-[`integrations/`](integrations/).
