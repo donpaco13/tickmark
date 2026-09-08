@@ -15,10 +15,12 @@ tk                                  reprint the list
 
 Rules:
 
-- **Give `tk` its own command. Never chain it with `&&`, and never bundle
-  several `tk` calls into one command** — a checklist that jumps three steps at
-  once shows nothing. One call, one state change, one redraw.
-- Mark a step done after the work is done, never in the same command that does it.
+- **Never mark a step done in the command that performs it.** `tk ok 3` inside
+  the command running the test claims the step passed before the test has said
+  anything. Either run the work first and mark it after, or gate the marking on
+  success: `pytest && tk ok 3`. The list has to be true before it is convenient.
+- Don't collapse several steps into one command when work happens between them —
+  a checklist that jumps three states at once shows nobody anything.
 - One step in progress at a time.
 - If this CLI already prints a live checklist of its own, use that instead and
   ignore this file.
