@@ -23,5 +23,8 @@ Rules:
 
 - One step in progress at a time.
 - Mark a step done only when it is actually done, not when you plan to do it.
-- The list is per project and per session. It is a progress display, not a
-  backlog: it does not replace whatever issue tracker the project uses.
+- The list is per project. Several agents in one checkout share it unless
+  whoever launches them sets TICKMARK_SESSION to something different for each
+  (`TICKMARK_SESSION=$AGENT_ID`, for instance).
+- It is a progress display, not a backlog: it does not replace whatever issue
+  tracker the project uses.

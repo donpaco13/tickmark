@@ -57,6 +57,11 @@ State lives in one JSON file per project, under `~/.local/share/tickmark`
 root when there is one, the working directory otherwise — so two repos never
 share a list.
 
+Several agents working in one checkout share that list. Give each its own by
+setting `TICKMARK_SESSION` when you launch it (`TICKMARK_SESSION=$AGENT_ID`);
+unlike `TICKMARK_STORE`, it splits only the task file and leaves the shared
+`roots.json` index in place, so status lines keep working.
+
 The file is plain JSON on purpose. A status line, a shell prompt or another tool
 can read it directly without going through `tk`. A `roots.json` index maps
 working directories to project roots, so a status line can find the right list
