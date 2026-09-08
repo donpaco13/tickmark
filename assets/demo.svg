@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 610 406" width="610" height="406" role="img" aria-label="tk add, tk go 1, tk next: a live checklist updating in the terminal">
+<title>tk in action: add, go, next</title>
+<style>
+  .panel { fill: #f6f8fa; }
+  .border { stroke: #d0d7de; }
+  .fg { fill: #1f2328; }
+  .muted { fill: #6e7781; }
+  .doing { fill: #0969da; }
+  .done { fill: #1a7f37; }
+  .todo { fill: #6e7781; }
+  text { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 15px; }
+  @media (prefers-color-scheme: dark) {
+    .panel { fill: #0d1117; }
+    .border { stroke: #30363d; }
+    .fg { fill: #c9d1d9; }
+    .muted { fill: #8b949e; }
+    .doing { fill: #58a6ff; }
+    .done { fill: #3fb950; }
+    .todo { fill: #8b949e; }
+  }
+</style>
+<rect x="0.5" y="0.5" width="609" height="405" rx="8" class="panel border" stroke-width="1"/>
+<g id="scene">
+<animate attributeName="opacity" values="1;1;0;0" keyTimes="0.00000;0.89474;0.95789;1.00000" dur="9.500s" repeatCount="indefinite"/>
+<clipPath id="clip1"><rect x="26" y="24" height="22" width="0">
+  <animate attributeName="width" values="0;0;558.0;558.0" keyTimes="0.00000;0.00000;0.08421;1.00000" dur="9.500s" repeatCount="indefinite"/>
+</rect></clipPath>
+<text x="26" y="41" class="fg" clip-path="url(#clip1)" xml:space="preserve">$ tk add &quot;read the config&quot; &quot;patch the handler&quot; &quot;run the tests&quot;</text>
+<g id="o0_0" opacity="0">
+<animate attributeName="opacity" values="0;0;1;1" keyTimes="0.00000;0.08421;0.10526;1.00000" dur="9.500s" repeatCount="indefinite"/>
+<text x="26" y="63" class="muted" xml:space="preserve">Tasks 0/3</text>
+</g>
+<g id="o0_1" opacity="0">
+<animate attributeName="opacity" values="0;0;1;1" keyTimes="0.00000;0.08421;0.10526;1.00000" dur="9.500s" repeatCount="indefinite"/>
+<text x="26" y="85" class="todo" xml:space="preserve">○ 1 read the config</text>
+</g>
+<g id="o0_2" opacity="0">
+<animate attributeName="opacity" values="0;0;1;1" keyTimes="0.00000;0.08421;0.10526;1.00000" dur="9.500s" repeatCount="indefinite"/>
+<text x="26" y="107" class="todo" xml:space="preserve">○ 2 patch the handler</text>
+</g>
+<g id="o0_3" opacity="0">
+<animate attributeName="opacity" values="0;0;1;1" keyTimes="0.00000;0.08421;0.10526;1.00000" dur="9.500s" repeatCount="indefinite"/>
+<text x="26" y="129" class="todo" xml:space="preserve">○ 3 run the tests</text>
+</g>
+<clipPath id="clip2"><rect x="26" y="148" height="22" width="0">
+  <animate attributeName="width" values="0;0;81.0;81.0" keyTimes="0.00000;0.26316;0.34737;1.00000" dur="9.500s" repeatCount="indefinite"/>
+</rect></clipPath>
+<text x="26" y="165" class="fg" clip-path="url(#clip2)" xml:space="preserve">$ tk go 1</text>
+<g id="o1_0" opacity="0">
+<animate attributeName="opacity" values="0;0;1;1" keyTimes="0.00000;0.34737;0.36842;1.00000" dur="9.500s" repeatCount="indefinite"/>
+<text x="26" y="187" class="muted" xml:space="preserve">Tasks 0/3</text>
+</g>
+<g id="o1_1" opacity="0">
+<animate attributeName="opacity" values="0;0;1;1" keyTimes="0.00000;0.34737;0.36842;1.00000" dur="9.500s" repeatCount="indefinite"/>
+<text x="26" y="209" class="doing" xml:space="preserve">▸ 1 read the config</text>
+</g>
+<g id="o1_2" opacity="0">
+<animate attributeName="opacity" values="0;0;1;1" keyTimes="0.00000;0.34737;0.36842;1.00000" dur="9.500s" repeatCount="indefinite"/>
+<text x="26" y="231" class="todo" xml:space="preserve">○ 2 patch the handler</text>
+</g>
+<g id="o1_3" opacity="0">
+<animate attributeName="opacity" values="0;0;1;1" keyTimes="0.00000;0.34737;0.36842;1.00000" dur="9.500s" repeatCount="indefinite"/>
+<text x="26" y="253" class="todo" xml:space="preserve">○ 3 run the tests</text>
+</g>
+<clipPath id="clip3"><rect x="26" y="272" height="22" width="0">
+  <animate attributeName="width" values="0;0;81.0;81.0" keyTimes="0.00000;0.52632;0.61053;1.00000" dur="9.500s" repeatCount="indefinite"/>
+</rect></clipPath>
+<text x="26" y="289" class="fg" clip-path="url(#clip3)" xml:space="preserve">$ tk next</text>
+<g id="o2_0" opacity="0">
+<animate attributeName="opacity" values="0;0;1;1" keyTimes="0.00000;0.61053;0.63158;1.00000" dur="9.500s" repeatCount="indefinite"/>
+<text x="26" y="311" class="muted" xml:space="preserve">Tasks 1/3</text>
+</g>
+<g id="o2_1" opacity="0">
+<animate attributeName="opacity" values="0;0;1;1" keyTimes="0.00000;0.61053;0.63158;1.00000" dur="9.500s" repeatCount="indefinite"/>
+<text x="26" y="333" class="done" xml:space="preserve">✔ 1 read the config</text>
+</g>
+<g id="o2_2" opacity="0">
+<animate attributeName="opacity" values="0;0;1;1" keyTimes="0.00000;0.61053;0.63158;1.00000" dur="9.500s" repeatCount="indefinite"/>
+<text x="26" y="355" class="doing" xml:space="preserve">▸ 2 patch the handler</text>
+</g>
+<g id="o2_3" opacity="0">
+<animate attributeName="opacity" values="0;0;1;1" keyTimes="0.00000;0.61053;0.63158;1.00000" dur="9.500s" repeatCount="indefinite"/>
+<text x="26" y="377" class="todo" xml:space="preserve">○ 3 run the tests</text>
+</g>
+</g>
+</svg>

@@ -1,34 +1,14 @@
 # tickmark
 
-**A live checklist for coding agents that don't have one.**
+![tk add, tk go 1, tk next updating a live checklist in the terminal](assets/demo.svg)
 
-Agents that ship a native todo tool render a checklist in your terminal, and you
-can see at a glance which step they're on. Agents that don't leave you with a
-wall of scrolling text and a summary at the very end — you find out what
-happened only once it has already happened.
+You can't tell where your agent is. It's mid-task, the terminal is a wall of
+scrolling text, and the only status update arrives as a summary once the work
+is already done. Agents that ship a native todo tool don't have this problem:
+they render a live checklist you can glance at. Most agents don't ship one.
 
-`tk` gives that checklist back to any agent. No API, no daemon, no plugin
-system: one Python file with no dependencies, called as a shell command.
-
-```
-$ tk add "read the config" "patch the handler" "run the tests"
-Tasks 0/3
-○ 1 read the config
-○ 2 patch the handler
-○ 3 run the tests
-
-$ tk go 1
-Tasks 0/3
-▸ 1 read the config
-○ 2 patch the handler
-○ 3 run the tests
-
-$ tk next
-Tasks 1/3
-✔ 1 read the config
-▸ 2 patch the handler
-○ 3 run the tests
-```
+`tk` gives them one anyway. No API, no daemon, no plugin system: one Python
+file with no dependencies, called as a shell command.
 
 ## Install
 
