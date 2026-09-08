@@ -20,14 +20,15 @@ cd tickmark && ./install.sh
 This copies `tk` to `~/.local/bin` and tells you which agent instruction files
 it found. Then append [`AGENTS.md`](AGENTS.md) to the one your agent reads:
 
-| Agent | Instruction file |
-| --- | --- |
-| Claude Code | `~/.claude/CLAUDE.md` or `./CLAUDE.md` |
-| Codex | `~/.codex/AGENTS.md` or `./AGENTS.md` |
-| opencode | `~/.config/opencode/AGENTS.md` |
-| Gemini CLI | `~/.gemini/GEMINI.md` |
-| Crush | `~/.config/crush/CRUSH.md` |
-| anything else | whatever file it loads at startup |
+| Agent | Instruction file | Native checklist? |
+| --- | --- | --- |
+| Antigravity CLI (`agy`) | `AGENTS.md` | no — `tk` is for this |
+| Codex | `~/.codex/AGENTS.md` or `./AGENTS.md` | untested |
+| Crush | `~/.config/crush/CRUSH.md` | untested |
+| anything else | whatever file it loads at startup | check first |
+
+Claude Code and opencode already ship one (`TaskCreate`/`TaskUpdate` and
+`todowrite`/`todoread`). Use theirs — `tk` has nothing to add there.
 
 That's the whole integration. The agent already knows how to run shell
 commands — it just needs to be told that this one exists.
