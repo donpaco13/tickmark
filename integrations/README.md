@@ -7,8 +7,10 @@ second at effectively zero cost. On a missing store, an unknown directory,
 an empty list or corrupt JSON, it prints nothing and exits `0`: a status
 line showing a traceback is worse than no status line.
 
-Output looks like `1/2 ▸ patcher le handler` (current task, truncated at 40
-chars), or just `2/2` once every task is done. No color is added — each
+Output looks like `1/2 ▸ patcher le handler 2m14s` (current task, truncated
+at 40 chars, then how long it has been in progress), or just `2/2` once every
+task is done. A task already in progress before tickmark recorded start times
+has none, so it shows no duration. No color is added — each
 target below applies its own. Set `TK_STATUS_ASCII=1` to force the `o`/`>`
 fallback if your terminal locale isn't UTF-8 (auto-detected otherwise).
 
