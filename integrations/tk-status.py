@@ -15,15 +15,18 @@ Usage
                                 # JSON object read from stdin (Claude Code's
                                 # statusLine contract)
 
-Output: "<done>/<total> <mark> <current task>", truncated, or just
-"<done>/<total>" once every task is done. Empty output, exit 0, when there
-is nothing to show. See integrations/README.md for how to wire this into a
-given status line.
+Output: "<done>/<total> <mark> <current task> <duration>", truncated, or just
+"<done>/<total>" once every task is done. The duration is how long the task
+has been in progress, and is absent on a task that is not in progress or that
+was started by a tk old enough not to record it. Empty output, exit 0, when
+there is nothing to show. See integrations/README.md for how to wire this
+into a given status line.
 """
 import hashlib
 import json
 import os
 import sys
+import time
 
 HOME = os.path.expanduser("~")
 XDG = os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local", "share")
@@ -92,7 +95,30 @@ def use_ascii():
     return "utf-8" not in locale.lower() and "utf8" not in locale.lower()
 
 
-def render(tasks):
+def elapsed(since, now):
+    """Same short duration tk prints. Duplicated on purpose: this file never
+    imports tk, so that a status line repainting every second costs one open()
+    and nothing else. Any value that is not a usable number reads as "no
+    duration" — a status line must never be the thing that shows an error.
+    """
+    if isinstance(since, bool) or not isinstance(since, (int, float)):
+        return ""
+    try:
+        seconds = int(now - since)
+    except (ValueError, OverflowError):
+        return ""
+    if seconds < 0:
+        seconds = 0
+    if seconds < 60:
+        return "%ds" % seconds
+    if seconds < 3600:
+        return "%dm%02ds" % (seconds // 60, seconds % 60)
+    if seconds < 86400:
+        return "%dh%02dm" % (seconds // 3600, seconds % 3600 // 60)
+    return "%dd%02dh" % (seconds // 86400, seconds % 86400 // 3600)
+
+
+def render(tasks, now=None):
     if not tasks:
         return ""
     marks = MARK_ASCII if use_ascii() else MARK_UTF8
@@ -106,7 +132,13 @@ def render(tasks):
     label = str(current.get("t", ""))
     if len(label) > MAX_LABEL:
         label = label[: MAX_LABEL - 1] + "…"
-    return "%d/%d %s %s" % (done, total, marks[current.get("s", "todo")], label)
+    out = "%d/%d %s %s" % (done, total, marks[current.get("s", "todo")], label)
+    if current.get("s") == "doing":
+        duration = elapsed(current.get("since"),
+                           time.time() if now is None else now)
+        if duration:
+            out += " " + duration
+    return out
 
 
 def main():

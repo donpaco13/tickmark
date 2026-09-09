@@ -2,18 +2,27 @@
 
 Run with: python3 -m unittest discover -s tests -v
 """
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
-TK = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tk")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TK = os.path.join(ROOT, "tk")
+TK_STATUS = os.path.join(ROOT, "integrations", "tk-status.py")
+
+# Any of the four scales the duration can print, anchored at end of line.
+DURATION = re.compile(r"(\d+s|\d+m\d\ds|\d+h\d\dm|\d+d\d\dh)$")
 
 
 def import_tk():
@@ -348,9 +357,16 @@ class VisibleContract(Base):
         self.run_tk("go", "2")
         self.run_tk("ok", "1")
         tasks = json.loads(self.run_tk("--json").stdout)
-        self.assertEqual(tasks, [{"t": "a", "s": "done"},
-                                 {"t": "b", "s": "doing"},
-                                 {"t": "c", "s": "todo"}])
+        # `since` is additive and rides on the task in progress only. Everything
+        # this test locked before still holds: same keys, same states, same
+        # order — and now also which task is allowed the extra key.
+        self.assertEqual(
+            [{k: v for k, v in t.items() if k != "since"} for t in tasks],
+            [{"t": "a", "s": "done"},
+             {"t": "b", "s": "doing"},
+             {"t": "c", "s": "todo"}])
+        self.assertEqual([sorted(t) for t in tasks],
+                         [["s", "t"], ["s", "since", "t"], ["s", "t"]])
 
     def test_new_clears_the_list(self):
         self.run_tk("add", "a")
@@ -369,6 +385,330 @@ class VisibleContract(Base):
     def test_version_and_help(self):
         self.assertIn("tickmark", self.run_tk("--version").stdout)
         self.assertIn("tk add", self.run_tk("--help").stdout)
+
+
+# --- the duration on the step in progress --------------------------------
+#
+# The rendered output now depends on the clock, so nothing here reads the real
+# one: unit tests pass `now` in, end-to-end tests write a `since` far enough in
+# the past that the printed value cannot change while the test runs. No sleeps.
+
+BASE = 1_700_000_000  # a fixed "now" for the unit tests
+
+
+class DurationFormat(Base):
+    """The scale, and what happens to values that are not a duration."""
+
+    def at(self, seconds_ago):
+        return self.tk.elapsed(BASE - seconds_ago, BASE)
+
+    def test_the_four_scales(self):
+        self.assertEqual(self.at(0), "0s")
+        self.assertEqual(self.at(1), "1s")
+        self.assertEqual(self.at(59), "59s")
+        self.assertEqual(self.at(60), "1m00s")
+        self.assertEqual(self.at(134), "2m14s")
+        self.assertEqual(self.at(3599), "59m59s")
+        self.assertEqual(self.at(3600), "1h00m")
+        self.assertEqual(self.at(3600 * 8 + 60 * 7), "8h07m")
+        self.assertEqual(self.at(86399), "23h59m")
+        self.assertEqual(self.at(86400), "1d00h")
+        self.assertEqual(self.at(86400 * 2 + 3600 * 4), "2d04h")
+
+    def test_it_stays_five_or_six_characters_wide(self):
+        # The leading number is not padded — "2m14s", the shape that was
+        # validated, not "02m14s" — so the width gains one character when it
+        # gains a digit, once per scale. The trailing number is padded, which
+        # is what would otherwise make it wobble every ten seconds.
+        for seconds in (60, 134, 599, 600, 3599, 3600, 3600 * 12, 86399,
+                        86400, 86400 * 9, 86400 * 40):
+            self.assertIn(len(self.at(seconds)), (5, 6), seconds)
+
+    def test_the_trailing_number_is_padded_so_it_never_wobbles(self):
+        self.assertEqual(self.at(60), "1m00s")
+        self.assertEqual(self.at(69), "1m09s")
+        self.assertEqual(self.at(3600 * 3 + 60 * 7), "3h07m")
+        self.assertEqual(self.at(86400 + 3600 * 2), "1d02h")
+
+    def test_a_clock_that_went_backwards_reads_as_zero(self):
+        self.assertEqual(self.tk.elapsed(BASE + 500, BASE), "0s")
+
+    def test_anything_that_is_not_a_number_shows_no_duration(self):
+        for bad in (None, "", "1700000000", True, False, [], {}, float("nan"),
+                    float("inf")):
+            self.assertEqual(self.tk.elapsed(bad, BASE), "", repr(bad))
+
+
+class DurationRendering(Base):
+    """Where it lands on the line, and what gives way when it does not fit."""
+
+    def plain(self, tasks, now=BASE, **env):
+        e = {"COLUMNS": "80", "NO_COLOR": "1", "TERM": "dumb"}
+        e.update(env)
+        with mock.patch.dict(os.environ, e, clear=False):
+            return self.tk.render(tasks, now=now)
+
+    def three_steps(self, since=BASE - 134):
+        doing = {"t": "patcher le handler", "s": "doing"}
+        if since is not None:
+            doing["since"] = since
+        return [{"t": "lire le config", "s": "done"}, doing,
+                {"t": "lancer les tests", "s": "todo"}]
+
+    def test_it_lands_at_the_end_of_the_line_in_progress(self):
+        lines = self.plain(self.three_steps()).splitlines()
+        self.assertEqual(lines[2], "\u25b8 2 patcher le handler  2m14s")
+
+    def test_no_other_line_carries_one(self):
+        lines = self.plain(self.three_steps()).splitlines()
+        self.assertEqual(lines[1], "\u2714 1 lire le config")
+        self.assertEqual(lines[3], "\u25cb 3 lancer les tests")
+
+    def test_it_costs_no_extra_line(self):
+        with_duration = self.plain(self.three_steps())
+        without = self.plain(self.three_steps(since=None))
+        self.assertEqual(len(with_duration.splitlines()),
+                         len(without.splitlines()))
+        self.assertEqual(len(with_duration.splitlines()), 4)
+
+    def test_a_todo_task_carrying_a_stray_since_stays_silent(self):
+        # Only the step in progress has a "running since" to report.
+        out = self.plain([{"t": "not started", "s": "todo", "since": BASE - 900}])
+        self.assertEqual(out.splitlines()[1], "\u25cb 1 not started")
+
+    def test_the_duration_is_counted_in_the_truncation(self):
+        out = self.plain([{"t": "x" * 200, "s": "doing", "since": BASE - 134}],
+                         COLUMNS="40")
+        line = out.splitlines()[1]
+        self.assertEqual(len(line), 40)
+        self.assertTrue(line.endswith("  2m14s"), line)
+        self.assertIn("\u2026  2m14s", line)  # the subject was cut, not the duration
+
+    def test_it_is_never_cut_in_half(self):
+        for columns in range(10, 61):
+            line = self.plain(self.three_steps(),
+                              COLUMNS=str(columns)).splitlines()[2]
+            self.assertLessEqual(len(line), columns, columns)
+            if "2m14s" not in line:
+                # Gone whole: no orphan fragment of it left behind.
+                for fragment in ("2m1", "m14s", "2m", "14s"):
+                    self.assertNotIn(fragment, line, (columns, line))
+
+    def test_a_terminal_too_narrow_drops_the_duration_not_the_subject(self):
+        line = self.plain(self.three_steps(), COLUMNS="18").splitlines()[2]
+        self.assertNotIn("2m14s", line)
+        self.assertTrue(line.startswith("\u25b8 2 patcher"), line)
+        self.assertLessEqual(len(line), 18)
+
+    def test_it_survives_down_to_the_last_column_that_fits(self):
+        # Head 4 + gap 2 + "2m14s" 5 + MIN_SUBJECT 8 = 19.
+        self.assertIn("2m14s", self.plain(self.three_steps(), COLUMNS="19"))
+        self.assertNotIn("2m14s", self.plain(self.three_steps(), COLUMNS="18"))
+
+    def test_redirected_output_keeps_it_and_cuts_nothing(self):
+        out = self.plain(self.three_steps(), COLUMNS="")
+        self.assertIn("\u25b8 2 patcher le handler  2m14s", out)
+
+    def test_it_is_inside_the_colour_of_its_line(self):
+        stdout = mock.MagicMock(wraps=sys.stdout)
+        stdout.isatty.return_value = True
+        with mock.patch.object(sys, "stdout", stdout), \
+                mock.patch.dict(os.environ, {"COLUMNS": "80", "TERM": "xterm"},
+                                clear=False):
+            os.environ.pop("NO_COLOR", None)
+            line = self.tk.render(self.three_steps(), now=BASE).splitlines()[2]
+        self.assertTrue(line.startswith(self.tk.COLOR["doing"]))
+        self.assertTrue(line.endswith("2m14s" + self.tk.RESET))
+
+
+class DurationOnOlderLists(Base):
+    """A list written before this existed must render exactly as it used to."""
+
+    def test_a_doing_task_without_a_since_shows_no_duration(self):
+        self.tk.save([{"t": "a", "s": "done"}, {"t": "b", "s": "doing"}])
+        out = self.run_tk()
+        self.assertEqual(out.returncode, 0)
+        self.assertEqual(out.stdout.splitlines()[2], "\u25b8 2 b")
+        self.assertNotRegex(out.stdout, DURATION)
+
+    def test_the_json_of_an_older_list_is_unchanged(self):
+        self.tk.save([{"t": "b", "s": "doing"}])
+        self.assertEqual(json.loads(self.run_tk("--json").stdout),
+                         [{"t": "b", "s": "doing"}])
+
+    def test_an_unreadable_since_is_ignored_rather_than_raised(self):
+        self.tk.save([{"t": "b", "s": "doing", "since": "yesterday"}])
+        out = self.run_tk()
+        self.assertEqual(out.returncode, 0)
+        self.assertEqual(out.stdout.splitlines()[1], "\u25b8 1 b")
+
+    def test_go_starts_a_clock_on_a_task_left_running_by_an_older_tk(self):
+        self.tk.save([{"t": "b", "s": "doing"}])
+        self.run_tk("go", "1")
+        self.assertIn("since", json.loads(self.run_tk("--json").stdout)[0])
+
+
+class DurationLifecycle(Base):
+    """When the clock starts, when it keeps running, when it is thrown away."""
+
+    def tasks(self):
+        return json.loads(self.run_tk("--json").stdout)
+
+    def setUp(self):
+        Base.setUp(self)
+        self.run_tk("add", "a", "b", "c")
+
+    def test_go_starts_the_clock(self):
+        self.run_tk("go", "2")
+        a, b, c = self.tasks()
+        self.assertIsInstance(b["since"], int)
+        self.assertLessEqual(abs(b["since"] - time.time()), 5)
+        self.assertNotIn("since", a)
+        self.assertNotIn("since", c)
+
+    def test_go_on_the_task_already_running_does_not_restart_it(self):
+        self.run_tk("go", "2")
+        started = self.tasks()[1]["since"]
+        # Rewind it by an hour, then re-state the same step: the stall has to
+        # survive, otherwise an agent repeating `tk go` hides it for good.
+        self.seed_since(1, started - 3600)
+        self.run_tk("go", "2")
+        self.assertEqual(self.tasks()[1]["since"], started - 3600)
+
+    def test_moving_on_drops_the_stamp_of_the_task_left_behind(self):
+        self.run_tk("go", "1")
+        self.run_tk("go", "3")
+        tasks = self.tasks()
+        self.assertEqual(tasks[0]["s"], "todo")
+        self.assertNotIn("since", tasks[0])
+        self.assertIn("since", tasks[2])
+
+    def test_a_task_picked_up_again_gets_a_fresh_clock(self):
+        self.run_tk("go", "1")
+        self.seed_since(0, int(time.time()) - 86400)
+        self.run_tk("go", "2")   # 1 goes back to todo, losing its stamp
+        self.run_tk("go", "1")   # and starts from now, not from yesterday
+        self.assertLessEqual(abs(self.tasks()[0]["since"] - time.time()), 5)
+
+    def test_ok_throws_the_stamp_away(self):
+        self.run_tk("go", "2")
+        self.run_tk("ok", "2")
+        self.assertNotIn("since", self.tasks()[1])
+
+    def test_next_closes_one_clock_and_opens_the_following_one(self):
+        self.run_tk("go", "1")
+        self.run_tk("next")
+        a, b, c = self.tasks()
+        self.assertEqual((a["s"], b["s"]), ("done", "doing"))
+        self.assertNotIn("since", a)
+        self.assertIn("since", b)
+
+    def test_only_ever_one_stamp_in_the_list(self):
+        for args in (["go", "1"], ["go", "2"], ["next"], ["ok", "3"],
+                     ["go", "1"], ["rm", "2"]):
+            self.run_tk(*args)
+            self.assertLessEqual(
+                sum(1 for t in self.tasks() if "since" in t), 1, args)
+
+    def test_the_json_stays_parsable_and_free_of_escape_codes(self):
+        self.run_tk("go", "2")
+        out = self.run_tk("--json").stdout
+        self.assertNotIn("\033", out)
+        self.assertIsInstance(json.loads(out), list)
+
+    @unittest.skipUnless(hasattr(os, "openpty"), "no pty on this platform")
+    def test_the_json_stays_clean_on_a_real_terminal_too(self):
+        self.run_tk("go", "2")
+        out = self.run_pty("--json")
+        self.assertNotIn("\033", out)
+        self.assertEqual(json.loads(out.strip())[1]["s"], "doing")
+
+    def test_end_to_end_the_current_step_shows_its_duration(self):
+        self.run_tk("go", "2")
+        # Eight hours back: the printed value cannot change under this test.
+        self.seed_since(1, int(time.time()) - 3600 * 8 - 60 * 7)
+        lines = self.run_tk().stdout.splitlines()
+        self.assertEqual(lines[2], "\u25b8 2 b  8h07m")
+        self.assertEqual(lines[1], "\u25cb 1 a")
+        self.assertEqual(lines[3], "\u25cb 3 c")
+
+    def seed_since(self, index, value):
+        tasks = self.tk.load()
+        tasks[index]["since"] = value
+        self.tk.save(tasks)
+
+
+class StatusLineDuration(Base):
+    """integrations/tk-status.py: same duration, and never an error."""
+
+    def setUp(self):
+        Base.setUp(self)
+        spec = importlib.util.spec_from_file_location("tk_status", TK_STATUS)
+        self.status = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.status)
+        self.status.STORE = self.store
+
+    def run_status(self):
+        """main() with the working directory passed as an argument."""
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", ["tk-status.py", self.work]), \
+                contextlib.redirect_stdout(out):
+            code = self.status.main()
+        return code, out.getvalue()
+
+    def test_the_duration_is_appended_to_the_current_task(self):
+        self.assertEqual(
+            self.status.render([{"t": "a", "s": "done"},
+                                {"t": "patcher le handler", "s": "doing",
+                                 "since": BASE - 134}], now=BASE),
+            "1/2 \u25b8 patcher le handler 2m14s")
+
+    def test_a_task_not_in_progress_gets_none(self):
+        self.assertEqual(
+            self.status.render([{"t": "a", "s": "todo", "since": BASE - 134}],
+                               now=BASE),
+            "0/1 \u25cb a")
+
+    def test_an_older_list_renders_as_it_did(self):
+        self.assertEqual(
+            self.status.render([{"t": "a", "s": "doing"}], now=BASE),
+            "0/1 \u25b8 a")
+
+    def test_an_unreadable_timestamp_prints_the_line_without_it(self):
+        for bad in ("soon", None, True, [], float("nan")):
+            self.assertEqual(
+                self.status.render([{"t": "a", "s": "doing", "since": bad}],
+                                   now=BASE),
+                "0/1 \u25b8 a", repr(bad))
+
+    def test_the_label_is_still_truncated_and_the_duration_survives(self):
+        out = self.status.render(
+            [{"t": "z" * 80, "s": "doing", "since": BASE - 134}], now=BASE)
+        self.assertTrue(out.endswith("\u2026 2m14s"), out)
+
+    def test_end_to_end_against_a_real_store(self):
+        self.tk.save([{"t": "b", "s": "doing",
+                       "since": int(time.time()) - 3600 * 8 - 60 * 7}])
+        code, out = self.run_status()
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "0/1 \u25b8 b 8h07m")
+
+    def test_no_store_is_silence_and_a_zero_exit(self):
+        code, out = self.run_status()
+        self.assertEqual((code, out), (0, ""))
+
+    def test_corrupt_json_is_silence_and_a_zero_exit(self):
+        path = self.tk.state_path()
+        with open(path, "w") as f:
+            f.write('[{"t": "half writ')
+        code, out = self.run_status()
+        self.assertEqual((code, out), (0, ""))
+
+    def test_a_corrupt_timestamp_never_reaches_the_status_line_as_an_error(self):
+        self.tk.save([{"t": "b", "s": "doing", "since": {"not": "a time"}}])
+        code, out = self.run_status()
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "0/1 \u25b8 b")
 
 
 if __name__ == "__main__":

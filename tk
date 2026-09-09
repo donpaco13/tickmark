@@ -20,6 +20,9 @@ Design notes
   shows where things stand, which is exactly one tool call for the agent.
 - The state file is plain JSON on purpose: a status line, a prompt hook or
   another tool can read it without going through tk.
+- The task in progress carries the epoch second it started, under "since". It
+  is rendered at the end of that one line, so a step stuck for eight minutes
+  says so on its own. Older lists have no "since" and simply show no duration.
 """
 import hashlib
 import json
@@ -27,6 +30,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 __version__ = "1.0.0"
 
@@ -47,6 +51,14 @@ SESSION = os.environ.get("TICKMARK_SESSION") or ""
 MARK = {"todo": "○", "doing": "▸", "done": "✔"}
 COLOR = {"todo": "\033[2m", "doing": "\033[1;33m", "done": "\033[32m"}
 RESET = "\033[0m"
+
+# The duration sits at the end of the line in progress. Two spaces, no column,
+# no frame: every command reprints the whole list, so anything that adds a line
+# or a box is paid again on every single call.
+GAP = "  "
+# Below this many columns left for the subject, the duration goes rather than
+# the subject. The subject is what the line is for.
+MIN_SUBJECT = 8
 
 # The display language follows the shell locale. The agent-facing contract
 # (command names, JSON keys) never changes, so instructions stay portable.
@@ -199,22 +211,65 @@ def term_width():
     return 0
 
 
-def render(tasks):
+def elapsed(since, now):
+    """How long the current task has been running, or "" when unknowable.
+
+    Five or six characters from one minute on, so the end of the line stays put
+    between two reprints of the same list instead of dancing left and right.
+    The trailing number is padded ("1m09s", not "1m9s"), which is what would
+    otherwise move it every ten seconds; the leading one is not, because the
+    shape to read at a glance is "2m14s". It gains a character when it gains a
+    digit, once per scale.
+
+    Anything that is not a usable number reads as "no duration", never as an
+    error: the store can be hand-edited, and half a list is better than none.
+    """
+    if isinstance(since, bool) or not isinstance(since, (int, float)):
+        return ""
+    try:
+        seconds = int(now - since)
+    except (ValueError, OverflowError):  # nan, inf
+        return ""
+    if seconds < 0:  # a clock that went backwards, or a store from elsewhere
+        seconds = 0
+    if seconds < 60:
+        return "%ds" % seconds
+    if seconds < 3600:
+        return "%dm%02ds" % (seconds // 60, seconds % 60)
+    if seconds < 86400:
+        return "%dh%02dm" % (seconds // 3600, seconds % 3600 // 60)
+    return "%dd%02dh" % (seconds // 86400, seconds % 86400 // 3600)
+
+
+def render(tasks, now=None):
     if not tasks:
         return s("empty")
     width = term_width()
     color = use_color()
+    if now is None:
+        now = time.time()
     done = sum(1 for t in tasks if t["s"] == "done")
     lines = [s("count", done, len(tasks))]
     for i, t in enumerate(tasks, 1):
         head = "%s %d " % (MARK[t["s"]], i)
         subject = t["t"]
-        room = width - len(head)
+        tail = ""
+        if t["s"] == "doing":
+            duration = elapsed(t.get("since"), now)
+            if duration:
+                tail = GAP + duration
+        room = width - len(head) - len(tail)
+        # A terminal too narrow for both drops the duration whole. Cutting it in
+        # two would print a number that is not a number; shrinking the subject
+        # to nothing would print a line that says nothing.
+        if width and tail and room < MIN_SUBJECT:
+            tail = ""
+            room = width - len(head)
         # ponytail: counts characters, not display columns. A subject in CJK or
         # emoji can still spill by a column; switch to wcwidth if that shows up.
         if width and room > 0 and len(subject) > room:
             subject = subject[:room - 1] + "…" if room > 1 else "…"
-        line = head + subject
+        line = head + subject + tail
         lines.append(COLOR[t["s"]] + line + RESET if color else line)
     return "\n".join(lines)
 
@@ -258,10 +313,21 @@ def main():
         if not idx:
             print(s("need_number", "go"), file=sys.stderr)
             return 1
+        target = tasks[idx[0]]
         for t in tasks:
-            if t["s"] == "doing":
+            if t["s"] == "doing" and t is not target:
+                # Sent back to todo: it is not running any more, so it has no
+                # "running since". Keeping the old stamp would count the time it
+                # spent parked as time spent working the next time it is picked.
                 t["s"] = "todo"
-        tasks[idx[0]]["s"] = "doing"
+                t.pop("since", None)
+        # Already the current task: leave the clock alone. Restarting it on a
+        # repeated `tk go` would erase the eight-minute stall this exists to
+        # show, and an agent re-stating where it is does that all the time. A
+        # task left doing by an older tk has no clock at all, so start one.
+        if target["s"] != "doing" or not elapsed(target.get("since"), time.time()):
+            target["s"] = "doing"
+            target["since"] = int(time.time())
     elif cmd == "ok":
         idx = pick(tasks, rest)
         if not idx:
@@ -269,13 +335,16 @@ def main():
             return 1
         for i in idx:
             tasks[i]["s"] = "done"
+            tasks[i].pop("since", None)
     elif cmd == "next":
         for t in tasks:
             if t["s"] == "doing":
                 t["s"] = "done"
+                t.pop("since", None)
         for t in tasks:
             if t["s"] == "todo":
                 t["s"] = "doing"
+                t["since"] = int(time.time())
                 break
     elif cmd == "rm":
         idx = pick(tasks, rest)

@@ -66,6 +66,11 @@ and shows the state. That matters: it's one tool call for the agent instead of
 two, which is the difference between an agent that keeps the list up to date and
 one that stops bothering.
 
+The step in progress shows how long it has been running, at the end of its own
+line: `▸ 2 patcher le handler  2m14s`. A step stuck for eight minutes says
+so before you think to ask. It adds no line to the output, and it drops out
+rather than eat into the subject when the terminal is too narrow for both.
+
 ## How it works
 
 State lives in one JSON file per project, under `~/.local/share/tickmark`
