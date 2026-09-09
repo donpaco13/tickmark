@@ -43,10 +43,24 @@ LEGACY_STORE = os.path.join(HOME, ".local", "share", "agy-tasks")
 # and overwrite each other. Nothing in the environment tells them apart on its
 # own: a process session id changes between two calls of the same agent (an
 # agent CLI spawns a fresh shell per command), and a tty is absent as soon as
-# output is captured. So the split is opt-in, and whoever runs the agents sets
-# it once: TICKMARK_SESSION=$AGENT_ID. Unset, the list stays per project, and
+# output is captured.
+#
+# So we look for an identifier the runner already publishes. TICKMARK_SESSION
+# wins when set. Otherwise we fall back to the variables agent runners export
+# to name the agent they just started -- that covers the common case where
+# several agents share one checkout and nobody remembered to set anything.
+# A plain human shell exports none of these, so the list stays per project and
 # the file name is the one earlier versions wrote.
-SESSION = os.environ.get("TICKMARK_SESSION") or ""
+#
+# Why the fallback matters: opt-in alone reproduces the bug it was meant to
+# fix. An agent that forgets the variable silently joins another agent's list,
+# sees tasks it never created, and overwrites them on its next call.
+SESSION = (
+    os.environ.get("TICKMARK_SESSION")
+    or os.environ.get("AGENT_ID")
+    or os.environ.get("AGENT_NAME")
+    or ""
+)
 
 MARK = {"todo": "○", "doing": "▸", "done": "✔"}
 COLOR = {"todo": "\033[2m", "doing": "\033[1;33m", "done": "\033[32m"}
@@ -92,7 +106,8 @@ USAGE = """tickmark %s - session task tracker
   tk --json                              show the list as JSON (for status lines)
 
 State: %s
-Set TICKMARK_SESSION to give parallel agents in one checkout separate lists.
+Parallel agents in one checkout get separate lists automatically (AGENT_ID).
+  Set TICKMARK_SESSION to override or to split a plain shell.
 """ % (__version__, STORE)
 
 
