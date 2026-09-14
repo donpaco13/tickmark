@@ -881,7 +881,12 @@ class DurationKept(Base):
         return json.loads(self.run_tk("--json").stdout)
 
     def start(self, index, seconds_ago):
-        """Put task `index` in progress, started `seconds_ago` ago."""
+        """Put task `index` in progress, started `seconds_ago` ago.
+
+        The recorded value can land one second late: `since` is a whole second
+        and tk closes the task against a clock that may have ticked in between.
+        The assertions below allow for that rather than race it.
+        """
         self.run_tk("go", str(index + 1))
         tasks = self.tk.load()
         tasks[index]["since"] = int(time.time()) - seconds_ago
@@ -890,13 +895,13 @@ class DurationKept(Base):
     def test_ok_keeps_how_long_the_task_ran(self):
         self.start(0, 134)
         self.run_tk("ok", "1")
-        self.assertEqual(self.tasks()[0]["elapsed_seconds"], 134)
+        self.assertAlmostEqual(self.tasks()[0]["elapsed_seconds"], 134, delta=2)
 
     def test_next_keeps_it_too(self):
         self.start(0, 3600 * 2 + 60 * 7)
         self.run_tk("next")
         a, b, _ = self.tasks()
-        self.assertEqual(a["elapsed_seconds"], 3600 * 2 + 60 * 7)
+        self.assertAlmostEqual(a["elapsed_seconds"], 3600 * 2 + 60 * 7, delta=2)
         self.assertEqual(b["s"], "doing")
 
     def test_the_running_stamp_is_still_dropped(self):
@@ -918,14 +923,17 @@ class DurationKept(Base):
     def test_ticking_a_finished_task_again_does_not_wipe_its_duration(self):
         self.start(0, 134)
         self.run_tk("ok", "1")
+        kept = self.tasks()[0]["elapsed_seconds"]
         self.run_tk("ok", "1")
-        self.assertEqual(self.tasks()[0]["elapsed_seconds"], 134)
+        self.assertEqual(self.tasks()[0]["elapsed_seconds"], kept)
 
     def test_a_finished_task_shows_what_it_took(self):
-        self.start(0, 134)
+        # Far enough from a minute boundary that a one-second slip cannot
+        # change the two digits this asserts.
+        self.start(0, 3600 * 8 + 60 * 7 + 30)
         self.run_tk("ok", "1")
         self.assertEqual(self.run_tk().stdout.splitlines()[1],
-                         "\u2714 1 a  2m14s")
+                         "\u2714 1 a  8h07m")
 
     def test_it_costs_no_extra_line(self):
         self.start(0, 134)
