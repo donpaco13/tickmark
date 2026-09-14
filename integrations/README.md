@@ -81,6 +81,13 @@ picks them up from a non-UTF-8 stdout or locale on its own.
 
 ## Wiring it up
 
+`TICKMARK_STORE` and `TICKMARK_SESSION` have to reach the status line process
+too, not only the agent: the script reads the files `tk` writes and finds them
+the same way. `TICKMARK_ROOT` does not: the script never resolves a root
+itself. It looks the working directory up in `roots.json`, and `tk` records
+every directory it ran from against the pinned root, so a pinned list is still
+found from wherever the CLI wandered off to.
+
 Every snippet points at `tk-status.py` by absolute path. `install.sh` only
 installs `tk` itself, not this folder, so either keep your clone of this repo
 around and point at `integrations/tk-status.py` inside it, or copy
