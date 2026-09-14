@@ -158,7 +158,15 @@ def resolve_root(cwd):
 
 
 def load_tasks(root):
-    name = hashlib.sha1(root.encode("utf-8")).hexdigest()[:16] + ".json"
+    # Mirror tk's state_path(): TICKMARK_SESSION splits the list so parallel
+    # agents in one checkout don't share it. A status line that ignores the
+    # split reads a file that isn't there and renders nothing - which is
+    # exactly the setup where it matters most.
+    name = hashlib.sha1(root.encode("utf-8")).hexdigest()[:16]
+    session = os.environ.get("TICKMARK_SESSION") or ""
+    if session:
+        name += "-" + hashlib.sha1(session.encode("utf-8")).hexdigest()[:8]
+    name += ".json"
     try:
         with open(os.path.join(STORE, name), encoding="utf-8") as f:
             data = json.load(f)
