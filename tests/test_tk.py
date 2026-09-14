@@ -51,11 +51,29 @@ class Base(unittest.TestCase):
         self.tk = import_tk()
         self.tk.STORE = self.store
         self.tk.LEGACY_STORE = self.legacy
+        # Neutralize whatever identity tk picked up at import time from the
+        # ambient shell (a hive agent always has AGENT_ID/AGENT_NAME set), so
+        # in-process assertions see the same session-less state a bare `tk`
+        # would in a plain shell.
         self.tk.SESSION = ""
+        self.tk.AGENT = ""
+        self.tk.ROOT_OVERRIDE = ""
+
+    # Identity variables tk reads to pick a session/root/agent: the ambient
+    # shell (in particular every hive agent, which gets AGENT_ID/AGENT_NAME
+    # set for it) must not leak into a test's subprocess and silently move
+    # it onto a different store file than the in-process assertions use.
+    # A test that wants one of these sets it explicitly via env(**extra).
+    AMBIENT_IDENTITY_VARS = (
+        "TICKMARK_SESSION", "TICKMARK_AGENT", "TICKMARK_ROOT",
+        "AGENT_ID", "AGENT_NAME",
+    )
 
     def env(self, **extra):
         e = dict(os.environ)
         e.pop("NO_COLOR", None)
+        for var in self.AMBIENT_IDENTITY_VARS:
+            e.pop(var, None)
         e.update({
             "TICKMARK_STORE": self.store,
             "HOME": self.tmp,
@@ -1148,11 +1166,20 @@ class StatusLineDuration(Base):
         self.status.STORE = self.store
 
     def run_status(self):
-        """main() with the working directory passed as an argument."""
+        """main() with the working directory passed as an argument.
+
+        Runs in-process, so it reads the real os.environ directly (unlike
+        run_tk's subprocess, there is no env= to pass) -- the ambient
+        identity variables must be popped here for the same reason they are
+        stripped in Base.env().
+        """
         out = io.StringIO()
-        with mock.patch.object(sys, "argv", ["tk-status.py", self.work]), \
-                contextlib.redirect_stdout(out):
-            code = self.status.main()
+        with mock.patch.dict(os.environ, clear=False):
+            for var in self.AMBIENT_IDENTITY_VARS:
+                os.environ.pop(var, None)
+            with mock.patch.object(sys, "argv", ["tk-status.py", self.work]), \
+                    contextlib.redirect_stdout(out):
+                code = self.status.main()
         return code, out.getvalue()
 
     def test_the_duration_is_appended_to_the_current_task(self):
