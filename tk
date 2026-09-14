@@ -60,6 +60,10 @@ LEGACY_STORE = os.path.join(HOME, ".local", "share", "agy-tasks")
 # the file name is the one earlier versions wrote.
 SESSION = os.environ.get("TICKMARK_SESSION") or ""
 
+# Who is on a task, when several sub-agents share one list. Optional in every
+# sense: unset and passed no flag, tk writes nothing and prints nothing extra.
+AGENT = (os.environ.get("TICKMARK_AGENT") or "").strip()
+
 # Last word on which project this is. An agent CLI whose working directory
 # wanders (agy has that bug: a command sometimes runs from the CLI's own
 # install directory instead of the checkout) cannot be asked where it is, and
@@ -120,6 +124,7 @@ USAGE = """tickmark %s - session task tracker
 
   tk add "<subject>" ["<subject>" ...]   add one or more tasks
   tk go <n>                              mark task n as in progress
+  ... --agent <name>                     on add and go: who is on the task
   tk ok <n> [<n> ...]                    complete one or more tasks
   tk next                                complete the current task, start the next
   tk rm <n> [<n> ...]                    remove one or more tasks
@@ -130,6 +135,7 @@ USAGE = """tickmark %s - session task tracker
 
 State: %s
 Set TICKMARK_SESSION to give parallel agents in one checkout separate lists.
+Set TICKMARK_AGENT to tag every task a sub-agent adds or picks up.
 Set TICKMARK_ROOT to pin the project when the working directory is unreliable.
 """ % (__version__, STORE)
 
@@ -425,6 +431,9 @@ def render(tasks, now=None):
     lines = [s("count", done, len(tasks))]
     for i, t in enumerate(tasks, 1):
         head = "%s %d " % (marks[t["s"]], i)
+        who = t.get("agent")
+        if isinstance(who, str) and who:
+            head += "[%s] " % who
         subject = t["t"]
         tail = ""
         if t["s"] == "doing":
@@ -453,6 +462,22 @@ def render(tasks, now=None):
     return "\n".join(lines)
 
 
+def take_agent(rest):
+    """Pull `--agent <name>` out of the arguments.
+
+    Returns what is left and the name to use. The default is TICKMARK_AGENT,
+    so a sub-agent launched with it set tags its work without being told to,
+    and an orchestrator handing out tasks names the owner on the spot.
+    """
+    for i, arg in enumerate(rest):
+        if arg.startswith("--agent="):
+            return rest[:i] + rest[i + 1:], arg[len("--agent="):].strip()
+        if arg == "--agent":
+            name = rest[i + 1].strip() if i + 1 < len(rest) else ""
+            return rest[:i] + rest[i + 2:], name or AGENT
+    return rest, AGENT
+
+
 def pick(tasks, args):
     """Turn arguments into valid indices, ignoring anything else."""
     out = []
@@ -467,7 +492,7 @@ def main():
     argv = sys.argv[1:]
     shifted = False
     cmd = argv[0] if argv else "ls"
-    rest = argv[1:]
+    rest, agent = take_agent(argv[1:])
 
     if cmd in ("-h", "--help", "help"):
         emit(USAGE, end="")
@@ -492,7 +517,11 @@ def main():
         if not subjects:
             emit(s("need_subject"), sys.stderr)
             return 1
-        tasks += [{"t": x, "s": "todo"} for x in subjects]
+        for subject in subjects:
+            task = {"t": subject, "s": "todo"}
+            if agent:
+                task["agent"] = agent
+            tasks.append(task)
     elif cmd == "go":
         idx = pick(tasks, rest)
         if not idx:
@@ -513,6 +542,8 @@ def main():
         if target["s"] != "doing" or not elapsed(target.get("since"), time.time()):
             target["s"] = "doing"
             target["since"] = int(time.time())
+        if agent:
+            target["agent"] = agent
     elif cmd == "ok":
         idx = pick(tasks, rest)
         if not idx:

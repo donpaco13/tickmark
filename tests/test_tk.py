@@ -1046,6 +1046,89 @@ class WholeSeconds(Base):
         self.assertEqual(self.tk.format_duration("soon"), "")
 
 
+class AgentName(Base):
+    """An optional owner per task, for when sub-agents share one list."""
+
+    def tasks(self):
+        return json.loads(self.run_tk("--json").stdout)
+
+    def test_no_agent_anywhere_changes_nothing(self):
+        self.run_tk("add", "a")
+        self.assertEqual(self.tasks(), [{"t": "a", "s": "todo"}])
+        self.assertEqual(self.run_tk().stdout.splitlines()[1], "\u25cb 1 a")
+
+    def test_the_flag_tags_what_it_adds(self):
+        self.run_tk("add", "--agent", "Scanner", "a", "b")
+        self.assertEqual([t.get("agent") for t in self.tasks()],
+                         ["Scanner", "Scanner"])
+
+    def test_the_flag_is_not_mistaken_for_a_subject(self):
+        self.run_tk("add", "--agent", "Scanner", "a")
+        self.assertEqual([t["t"] for t in self.tasks()], ["a"])
+
+    def test_the_equals_form_works_too(self):
+        self.run_tk("add", "--agent=CV-Agent", "a")
+        self.assertEqual(self.tasks()[0]["agent"], "CV-Agent")
+
+    def test_the_environment_tags_without_a_flag(self):
+        self.run_tk("add", "a", env={"TICKMARK_AGENT": "Scanner"})
+        self.assertEqual(self.tasks()[0]["agent"], "Scanner")
+
+    def test_the_flag_wins_over_the_environment(self):
+        self.run_tk("add", "--agent", "Flag", "a",
+                    env={"TICKMARK_AGENT": "Env"})
+        self.assertEqual(self.tasks()[0]["agent"], "Flag")
+
+    def test_picking_a_task_up_stamps_who_picked_it_up(self):
+        self.run_tk("add", "a", "b")
+        self.run_tk("go", "2", env={"TICKMARK_AGENT": "CV-Agent"})
+        a, b = self.tasks()
+        self.assertEqual(b["agent"], "CV-Agent")
+        self.assertNotIn("agent", a)
+
+    def test_an_untagged_go_leaves_an_existing_owner_alone(self):
+        self.run_tk("add", "--agent", "Scanner", "a")
+        self.run_tk("go", "1")
+        self.assertEqual(self.tasks()[0]["agent"], "Scanner")
+
+    def test_the_name_is_rendered_before_the_subject(self):
+        self.run_tk("add", "--agent", "Scanner", "Scan Ashby")
+        self.assertEqual(self.run_tk().stdout.splitlines()[1],
+                         "\u25cb 1 [Scanner] Scan Ashby")
+
+    def test_it_survives_being_ticked_off_with_the_duration(self):
+        self.run_tk("add", "--agent", "Scanner", "a")
+        self.run_tk("go", "1")
+        self.run_tk("ok", "1")
+        task = self.tasks()[0]
+        self.assertEqual((task["s"], task["agent"]), ("done", "Scanner"))
+
+    def test_it_costs_no_extra_line(self):
+        self.run_tk("add", "--agent", "Scanner", "a", "b")
+        self.assertEqual(len(self.run_tk().stdout.splitlines()), 3)
+
+    def test_a_name_that_is_not_a_string_is_ignored_not_printed(self):
+        self.tk.save([{"t": "a", "s": "todo", "agent": {"who": "?"}},
+                      {"t": "b", "s": "todo", "agent": ""}])
+        out = self.run_tk()
+        self.assertEqual(out.returncode, 0)
+        self.assertEqual(out.stdout.splitlines()[1:],
+                         ["\u25cb 1 a", "\u25cb 2 b"])
+
+    def test_a_dangling_flag_is_dropped_rather_than_added_as_a_subject(self):
+        result = self.run_tk("add", "a", "--agent")
+        self.assertEqual([t["t"] for t in self.tasks()], ["a"])
+        self.assertEqual(result.returncode, 0)
+
+    def test_the_name_counts_against_the_terminal_width(self):
+        with mock.patch.dict(os.environ, {"COLUMNS": "24", "NO_COLOR": "1",
+                                          "TERM": "dumb"}, clear=False):
+            line = self.tk.render([{"t": "z" * 60, "s": "todo",
+                                    "agent": "Scanner"}]).splitlines()[1]
+        self.assertLessEqual(len(line), 24)
+        self.assertTrue(line.startswith("\u25cb 1 [Scanner] "), line)
+
+
 class StatusLineDuration(Base):
     """integrations/tk-status.py: same duration, and never an error."""
 
