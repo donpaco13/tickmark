@@ -83,7 +83,7 @@ MARK = {"todo": "○", "doing": "▸", "done": "✔"}
 # the set of states load() accepts, and that must not move.
 MARK_ASCII = {"todo": "o", "doing": ">", "done": "x"}
 CUT, CUT_ASCII = "…", "..."
-# Raised by setup_output() when the output stream cannot take the marks.
+# Set by setup_output() when the output stream cannot take the marks.
 ASCII = False
 COLOR = {"todo": "\033[2m", "doing": "\033[1;33m", "done": "\033[32m"}
 RESET = "\033[0m"
