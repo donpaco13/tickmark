@@ -124,7 +124,6 @@ USAGE = """tickmark %s - session task tracker
 
   tk add "<subject>" ["<subject>" ...]   add one or more tasks
   tk go <n>                              mark task n as in progress
-  ... --agent <name>                     on add and go: who is on the task
   tk ok <n> [<n> ...]                    complete one or more tasks
   tk next                                complete the current task, start the next
   tk rm <n> [<n> ...]                    remove one or more tasks
@@ -132,6 +131,8 @@ USAGE = """tickmark %s - session task tracker
   tk stats                               how long the finished tasks took
   tk                                     show the list
   tk --json                              show the list as JSON (for status lines)
+
+  add and go also take --agent <name>, to say who is on the task.
 
 State: %s
 Set TICKMARK_SESSION to give parallel agents in one checkout separate lists.
