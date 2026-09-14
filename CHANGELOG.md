@@ -49,7 +49,7 @@ Status line:
 - It assumes a status line is one condensed line, with no way to draw the
   checklist vertically under the prompt.
 
-## [1.0.0] - TBD
+## [1.0.0] - 2026-09-14
 
 Initial public release.
 
