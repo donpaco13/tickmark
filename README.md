@@ -111,6 +111,12 @@ both. Read it in a status line, not in the transcript — see above for why.
 
 ## Status lines
 
+Where the list is meant to be read, repainted on every prompt redraw:
+
+```
+2/5 ▸ scan the portals 43s
+```
+
 Ready-made snippets for Claude Code, starship, tmux and powerlevel10k, all
 reading `roots.json` directly with no `git`/`tk` call per repaint: see
 [`integrations/`](integrations/).
