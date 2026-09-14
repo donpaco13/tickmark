@@ -30,3 +30,5 @@ Rules:
 - The list is per project. Several agents in one checkout share it unless
   whoever launches them sets `TICKMARK_SESSION` differently for each. It is a
   progress display, not a backlog.
+- If you are one of several sub-agents on a shared list, pass
+  `--agent <your name>` on `tk add` and `tk go`, so each line says who is on it.
