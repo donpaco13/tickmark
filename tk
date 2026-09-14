@@ -13,16 +13,28 @@ can call as a shell command.
 
 Design notes
 ------------
-- State lives in one JSON file per project (git root when there is one, current
-  directory otherwise), so two projects never share a list. Set TICKMARK_SESSION
-  to split that further when several agents work in one checkout at once.
+- State lives in one JSON file per project, so two projects never share a list.
+  The project is the git root; without git on the PATH, the nearest ancestor
+  carrying a project marker; TICKMARK_ROOT overrides both when the working
+  directory itself cannot be trusted. Set TICKMARK_SESSION to split the list
+  further when several agents work in one checkout at once.
 - Every command reprints the full list. One call both updates the state and
   shows where things stand, which is exactly one tool call for the agent.
+- Output is reconfigured to UTF-8 before anything is printed, and falls back
+  to ASCII marks when the stream refuses. A checklist that degrades is worth
+  something; a command that dies on a glyph is worth nothing.
 - The state file is plain JSON on purpose: a status line, a prompt hook or
   another tool can read it without going through tk.
 - The task in progress carries the epoch second it started, under "since". It
   is rendered at the end of that one line, so a step stuck for eight minutes
   says so on its own. Older lists have no "since" and simply show no duration.
+- Closing a task turns that stamp into "elapsed_seconds", kept for good. An
+  agent only calls tk at transitions, so nothing ever renders a step part-way
+  through and the live duration alone reads 0s every time. Kept, it feeds the
+  end of each finished line and `tk stats`.
+- A task can carry an optional "agent" name, for when several sub-agents work
+  one list at once. Both keys are additive: a store from an older tk reads
+  exactly as it did.
 """
 import hashlib
 import json
@@ -48,7 +60,31 @@ LEGACY_STORE = os.path.join(HOME, ".local", "share", "agy-tasks")
 # the file name is the one earlier versions wrote.
 SESSION = os.environ.get("TICKMARK_SESSION") or ""
 
+# Who is on a task, when several sub-agents share one list. Optional in every
+# sense: unset and passed no flag, tk writes nothing and prints nothing extra.
+AGENT = (os.environ.get("TICKMARK_AGENT") or "").strip()
+
+# Last word on which project this is. An agent CLI whose working directory
+# wanders (agy has that bug: a command sometimes runs from the CLI's own
+# install directory instead of the checkout) cannot be asked where it is, and
+# no heuristic built on the working directory can survive that. Whoever runs
+# the agent sets this once and the list stops moving.
+ROOT_OVERRIDE = os.environ.get("TICKMARK_ROOT") or ""
+if ROOT_OVERRIDE:
+    ROOT_OVERRIDE = os.path.abspath(os.path.expanduser(ROOT_OVERRIDE))
+
+# What marks the top of a checkout when git cannot be asked. Ordered by how
+# strongly each one says "this is the root", and the walk stops at the first
+# ancestor carrying any of them.
+MARKERS = (".git", "pyproject.toml", "package.json", ".hg")
+
 MARK = {"todo": "○", "doing": "▸", "done": "✔"}
+# What a console that cannot carry UTF-8 gets instead. Same keys: MARK is also
+# the set of states load() accepts, and that must not move.
+MARK_ASCII = {"todo": "o", "doing": ">", "done": "x"}
+CUT, CUT_ASCII = "…", "..."
+# Set by setup_output() when the output stream cannot take the marks.
+ASCII = False
 COLOR = {"todo": "\033[2m", "doing": "\033[1;33m", "done": "\033[32m"}
 RESET = "\033[0m"
 
@@ -74,6 +110,10 @@ STRINGS = {
     "need_number": ("tk %s attend le numero d'une tache existante.",
                     "tk %s expects the number of an existing task."),
     "unknown": ("Commande inconnue : %s", "Unknown command: %s"),
+    "stats_none": ("Aucune duree enregistree pour l'instant.",
+                   "No recorded duration yet."),
+    "stats": ("%d terminees en %s | mediane %s | plus longue %s",
+              "%d done in %s | median %s | slowest %s"),
     "shifted": ("Numeros redistribues : utilise ceux ci-dessus, pas ceux que "
                 "tu avais en tete.",
                 "Numbers were reassigned: use the ones above, not the ones you "
@@ -88,11 +128,16 @@ USAGE = """tickmark %s - session task tracker
   tk next                                complete the current task, start the next
   tk rm <n> [<n> ...]                    remove one or more tasks
   tk new                                 clear the list
+  tk stats                               how long the finished tasks took
   tk                                     show the list
   tk --json                              show the list as JSON (for status lines)
 
+  add and go also take --agent <name>, to say who is on the task.
+
 State: %s
 Set TICKMARK_SESSION to give parallel agents in one checkout separate lists.
+Set TICKMARK_AGENT to tag every task a sub-agent adds or picks up.
+Set TICKMARK_ROOT to pin the project when the working directory is unreliable.
 """ % (__version__, STORE)
 
 
@@ -101,8 +146,48 @@ def s(key, *args):
     return text % args if args else text
 
 
+def cwd():
+    """The working directory, or the home directory when it has gone.
+
+    A directory can be deleted under a running shell, and os.getcwd() then
+    raises. Losing the checklist over that would be worse than filing the list
+    under a fallback nobody will look at.
+    """
+    try:
+        return os.getcwd()
+    except OSError:
+        return HOME
+
+
+def marker_root(start):
+    """The nearest ancestor of `start` that looks like a project root, or "".
+
+    This is what stands in for git when git cannot be run. It answers the same
+    question git does — where does this checkout begin — from the files that
+    are there anyway.
+    """
+    path = os.path.abspath(start)
+    while True:
+        for marker in MARKERS:
+            if os.path.exists(os.path.join(path, marker)):
+                return path
+        parent = os.path.dirname(path)
+        if parent == path:  # filesystem root, nothing above it
+            return ""
+        path = parent
+
+
 def project_root():
-    """The git root when there is one, the working directory otherwise."""
+    """The project this list belongs to.
+
+    TICKMARK_ROOT wins when it is set, because it is the only answer that
+    survives a CLI whose working directory moves on its own. Then git. Then the
+    walk up to a marker: falling back to the working directory meant that a
+    machine without git on the PATH — a plain Windows install — opened a fresh,
+    empty list the moment the agent stepped into a subdirectory.
+    """
+    if ROOT_OVERRIDE:
+        return ROOT_OVERRIDE
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -113,10 +198,11 @@ def project_root():
             return out.stdout.strip()
     except Exception:
         pass
-    return os.getcwd()
+    here = cwd()
+    return marker_root(here) or here
 
 
-def remember_root(cwd, root):
+def remember_root(where, root):
     """Record working directory -> project root.
 
     A status line can then find the right list without shelling out to git on
@@ -128,9 +214,9 @@ def remember_root(cwd, root):
             roots = json.load(f)
     except (OSError, json.JSONDecodeError):
         roots = {}
-    if roots.get(cwd) == root:
+    if roots.get(where) == root:
         return
-    roots[cwd] = root
+    roots[where] = root
     tmp = "%s.%d.tmp" % (p, os.getpid())
     try:
         with open(tmp, "w") as f:
@@ -143,7 +229,7 @@ def remember_root(cwd, root):
 def state_path():
     root = project_root()
     os.makedirs(STORE, exist_ok=True)
-    remember_root(os.getcwd(), root)
+    remember_root(cwd(), root)
     name = hashlib.sha1(root.encode()).hexdigest()[:16]
     if SESSION:
         name += "-" + hashlib.sha1(SESSION.encode()).hexdigest()[:8]
@@ -195,6 +281,55 @@ def save(tasks):
     os.replace(tmp, p)
 
 
+def encodable(text, stream):
+    """Can this stream carry these characters?
+
+    A stream with no encoding of its own — a StringIO, a test capture — takes
+    any text, so it is not a reason to give up the marks.
+    """
+    encoding = getattr(stream, "encoding", None)
+    if not encoding:
+        return True
+    try:
+        text.encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return False
+    return True
+
+
+def setup_output():
+    """Ask for UTF-8 on the way out, and settle for ASCII rather than fail.
+
+    A Windows console on code page 1252 raises UnicodeEncodeError on the marks
+    and on the ellipsis. The command then died over a glyph, and the status
+    line reading it went blank with nothing to explain why. tk must never fall
+    over on a display problem: the checklist degrades, it does not disappear.
+    """
+    global ASCII
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # no reconfigure, or not a text stream at all
+            pass
+    ASCII = not encodable("".join(MARK.values()) + CUT, sys.stdout)
+
+
+def emit(text, stream=None, end="\n"):
+    """Print, whatever the console turns out to be able to represent.
+
+    setup_output() has normally already made this impossible, but a stream can
+    still refuse a character, and a checklist with a question mark in it beats
+    a traceback where the checklist was.
+    """
+    stream = stream or sys.stdout
+    try:
+        print(text, file=stream, end=end)
+    except UnicodeEncodeError:
+        encoding = getattr(stream, "encoding", None) or "ascii"
+        print(text.encode(encoding, "replace").decode(encoding, "replace"),
+              file=stream, end=end)
+
+
 def use_color():
     """Colour only when a person is looking at a terminal."""
     return (sys.stdout.isatty() and not os.environ.get("NO_COLOR")
@@ -211,8 +346,23 @@ def term_width():
     return 0
 
 
-def elapsed(since, now):
-    """How long the current task has been running, or "" when unknowable.
+def whole_seconds(value):
+    """`value` as a whole, non-negative number of seconds, or None.
+
+    Anything that is not a usable number reads as "no duration", never as an
+    error: the store can be hand-edited or written by another tool, and half a
+    list is better than none. A clock that went backwards reads as zero.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        return max(0, int(value))
+    except (ValueError, OverflowError):  # nan, inf
+        return None
+
+
+def format_duration(value):
+    """A number of seconds as 0s / 2m14s / 8h07m / 1d00h, or "".
 
     Five or six characters from one minute on, so the end of the line stays put
     between two reprints of the same list instead of dancing left and right.
@@ -220,25 +370,53 @@ def elapsed(since, now):
     otherwise move it every ten seconds; the leading one is not, because the
     shape to read at a glance is "2m14s". It gains a character when it gains a
     digit, once per scale.
-
-    Anything that is not a usable number reads as "no duration", never as an
-    error: the store can be hand-edited, and half a list is better than none.
     """
-    if isinstance(since, bool) or not isinstance(since, (int, float)):
+    count = whole_seconds(value)
+    if count is None:
         return ""
-    try:
-        seconds = int(now - since)
-    except (ValueError, OverflowError):  # nan, inf
-        return ""
-    if seconds < 0:  # a clock that went backwards, or a store from elsewhere
-        seconds = 0
-    if seconds < 60:
-        return "%ds" % seconds
-    if seconds < 3600:
-        return "%dm%02ds" % (seconds // 60, seconds % 60)
-    if seconds < 86400:
-        return "%dh%02dm" % (seconds // 3600, seconds % 3600 // 60)
-    return "%dd%02dh" % (seconds // 86400, seconds % 86400 // 3600)
+    if count < 60:
+        return "%ds" % count
+    if count < 3600:
+        return "%dm%02ds" % (count // 60, count % 60)
+    if count < 86400:
+        return "%dh%02dm" % (count // 3600, count % 3600 // 60)
+    return "%dd%02dh" % (count // 86400, count % 86400 // 3600)
+
+
+def elapsed(since, now):
+    """How long a task started at `since` has been running, or ""."""
+    return "" if whole_seconds(since) is None else format_duration(now - since)
+
+
+def finish(task, now):
+    """Close a task, keeping how long it actually took.
+
+    The duration used to be worked out in flight and dropped here. Measured
+    over a real agent session, eight rendered durations out of eight read 0s:
+    an agent calls tk at transitions only, so no render ever catches a step
+    part-way through. Written down at closing time it finally says something,
+    and `tk stats` reads it back.
+    """
+    since = task.pop("since", None)
+    task["s"] = "done"
+    if whole_seconds(since) is None:
+        return
+    ran = whole_seconds(now - since)
+    if ran is not None:
+        task["elapsed_seconds"] = ran
+
+
+def stats_line(tasks):
+    """One line of velocity, from the durations the finished tasks kept."""
+    kept = sorted(x for x in (whole_seconds(t.get("elapsed_seconds"))
+                              for t in tasks if t["s"] == "done")
+                  if x is not None)
+    if not kept:
+        return s("stats_none")
+    half = len(kept) // 2
+    median = kept[half] if len(kept) % 2 else (kept[half - 1] + kept[half]) // 2
+    return s("stats", len(kept), format_duration(sum(kept)),
+             format_duration(median), format_duration(kept[-1]))
 
 
 def render(tasks, now=None):
@@ -248,16 +426,26 @@ def render(tasks, now=None):
     color = use_color()
     if now is None:
         now = time.time()
+    marks = MARK_ASCII if ASCII else MARK
+    cut = CUT_ASCII if ASCII else CUT
     done = sum(1 for t in tasks if t["s"] == "done")
     lines = [s("count", done, len(tasks))]
     for i, t in enumerate(tasks, 1):
-        head = "%s %d " % (MARK[t["s"]], i)
+        head = "%s %d " % (marks[t["s"]], i)
+        who = t.get("agent")
+        if isinstance(who, str) and who:
+            head += "[%s] " % who
         subject = t["t"]
         tail = ""
         if t["s"] == "doing":
             duration = elapsed(t.get("since"), now)
-            if duration:
-                tail = GAP + duration
+        else:
+            # A finished task shows what it took. Only the one in progress is
+            # still counting, so only it reads the clock.
+            duration = format_duration(t.get("elapsed_seconds")) \
+                if t["s"] == "done" else ""
+        if duration:
+            tail = GAP + duration
         room = width - len(head) - len(tail)
         # A terminal too narrow for both drops the duration whole. Cutting it in
         # two would print a number that is not a number; shrinking the subject
@@ -268,10 +456,27 @@ def render(tasks, now=None):
         # ponytail: counts characters, not display columns. A subject in CJK or
         # emoji can still spill by a column; switch to wcwidth if that shows up.
         if width and room > 0 and len(subject) > room:
-            subject = subject[:room - 1] + "…" if room > 1 else "…"
+            subject = (subject[:room - len(cut)] + cut if room >= len(cut)
+                       else cut[:room])
         line = head + subject + tail
         lines.append(COLOR[t["s"]] + line + RESET if color else line)
     return "\n".join(lines)
+
+
+def take_agent(rest):
+    """Pull `--agent <name>` out of the arguments.
+
+    Returns what is left and the name to use. The default is TICKMARK_AGENT,
+    so a sub-agent launched with it set tags its work without being told to,
+    and an orchestrator handing out tasks names the owner on the spot.
+    """
+    for i, arg in enumerate(rest):
+        if arg.startswith("--agent="):
+            return rest[:i] + rest[i + 1:], arg[len("--agent="):].strip()
+        if arg == "--agent":
+            name = rest[i + 1].strip() if i + 1 < len(rest) else ""
+            return rest[:i] + rest[i + 2:], name or AGENT
+    return rest, AGENT
 
 
 def pick(tasks, args):
@@ -284,34 +489,44 @@ def pick(tasks, args):
 
 
 def main():
+    setup_output()
     argv = sys.argv[1:]
     shifted = False
     cmd = argv[0] if argv else "ls"
-    rest = argv[1:]
+    rest, agent = take_agent(argv[1:])
 
     if cmd in ("-h", "--help", "help"):
-        print(USAGE, end="")
+        emit(USAGE, end="")
         return 0
     if cmd in ("-V", "--version"):
-        print("tickmark %s" % __version__)
+        emit("tickmark %s" % __version__)
         return 0
 
     tasks = load()
 
     if cmd == "--json":
-        print(json.dumps(tasks, ensure_ascii=False))
+        emit(json.dumps(tasks, ensure_ascii=ASCII))
+        return 0
+
+    if cmd == "stats":
+        emit(render(tasks))
+        emit(stats_line(tasks))
         return 0
 
     if cmd == "add":
         subjects = [x.strip() for x in rest if x.strip()]
         if not subjects:
-            print(s("need_subject"), file=sys.stderr)
+            emit(s("need_subject"), sys.stderr)
             return 1
-        tasks += [{"t": x, "s": "todo"} for x in subjects]
+        for subject in subjects:
+            task = {"t": subject, "s": "todo"}
+            if agent:
+                task["agent"] = agent
+            tasks.append(task)
     elif cmd == "go":
         idx = pick(tasks, rest)
         if not idx:
-            print(s("need_number", "go"), file=sys.stderr)
+            emit(s("need_number", "go"), sys.stderr)
             return 1
         target = tasks[idx[0]]
         for t in tasks:
@@ -328,19 +543,21 @@ def main():
         if target["s"] != "doing" or not elapsed(target.get("since"), time.time()):
             target["s"] = "doing"
             target["since"] = int(time.time())
+        if agent:
+            target["agent"] = agent
     elif cmd == "ok":
         idx = pick(tasks, rest)
         if not idx:
-            print(s("need_number", "ok"), file=sys.stderr)
+            emit(s("need_number", "ok"), sys.stderr)
             return 1
+        now = time.time()
         for i in idx:
-            tasks[i]["s"] = "done"
-            tasks[i].pop("since", None)
+            finish(tasks[i], now)
     elif cmd == "next":
+        now = time.time()
         for t in tasks:
             if t["s"] == "doing":
-                t["s"] = "done"
-                t.pop("since", None)
+                finish(t, now)
         for t in tasks:
             if t["s"] == "todo":
                 t["s"] = "doing"
@@ -349,7 +566,7 @@ def main():
     elif cmd == "rm":
         idx = pick(tasks, rest)
         if not idx:
-            print(s("need_number", "rm"), file=sys.stderr)
+            emit(s("need_number", "rm"), sys.stderr)
             return 1
         drop = set(idx)
         tasks = [t for i, t in enumerate(tasks) if i not in drop]
@@ -359,14 +576,14 @@ def main():
     elif cmd == "new":
         tasks = []
     elif cmd != "ls":
-        print(s("unknown", cmd) + "\n", file=sys.stderr)
-        print(USAGE, end="", file=sys.stderr)
+        emit(s("unknown", cmd) + "\n", sys.stderr)
+        emit(USAGE, sys.stderr, end="")
         return 1
 
     save(tasks)
-    print(render(tasks))
+    emit(render(tasks))
     if shifted:
-        print(s("shifted"))
+        emit(s("shifted"))
     return 0
 
 

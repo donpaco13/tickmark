@@ -276,6 +276,216 @@ class Rendering(Base):
         self.assertNotIn("\033[", self.run_pty(NO_COLOR="1"))
 
 
+# --- defect: a glyph the console refused killed the whole command --------
+#
+# Reported from the same Windows install: on code page 1252 the marks raise
+# UnicodeEncodeError, the command dies, and the status line reading it goes
+# blank with nothing to explain why.
+
+class OutputEncoding(Base):
+
+    def test_a_cp1252_stream_refuses_the_marks(self):
+        """The platform fact the fix exists for, so it is not testing thin air."""
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+        with self.assertRaises(UnicodeEncodeError):
+            stream.write(self.tk.MARK["doing"])
+            stream.flush()
+
+    def test_a_narrow_console_no_longer_stops_the_command(self):
+        self.run_tk("add", "Générer les CVs adaptés")
+        for encoding in ("cp1252", "ascii", "latin-1"):
+            out = self.run_tk("go", "1", env={"PYTHONIOENCODING": encoding})
+            self.assertEqual(out.returncode, 0, encoding)
+            self.assertIn("Tasks 0/1", out.stdout, encoding)
+            self.assertEqual(out.stderr, "", encoding)
+
+    def test_the_marks_still_come_out_as_utf8(self):
+        self.run_tk("add", "a")
+        out = self.run_tk("go", "1", env={"PYTHONIOENCODING": "cp1252"})
+        self.assertIn("\u25b8", out.stdout)
+
+    def test_an_error_message_survives_the_same_console(self):
+        out = self.run_tk("frobnicate", env={"PYTHONIOENCODING": "cp1252"})
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("Unknown command", out.stderr)
+
+    def test_a_stream_that_cannot_take_the_marks_falls_back_to_ascii(self):
+        stream = mock.MagicMock()
+        stream.encoding = "cp1252"
+        stream.reconfigure.side_effect = AttributeError("no reconfigure here")
+        with mock.patch.object(sys, "stdout", stream), \
+                mock.patch.object(sys, "stderr", stream):
+            self.tk.setup_output()
+        self.assertTrue(self.tk.ASCII)
+
+    def test_a_stream_that_takes_utf8_keeps_the_marks(self):
+        stream = mock.MagicMock()
+        stream.encoding = "utf-8"
+        with mock.patch.object(sys, "stdout", stream), \
+                mock.patch.object(sys, "stderr", stream):
+            self.tk.setup_output()
+        self.assertFalse(self.tk.ASCII)
+
+    def test_a_stream_with_no_encoding_of_its_own_keeps_the_marks(self):
+        # io.StringIO, a test capture: takes any text, not a reason to degrade.
+        self.assertTrue(self.tk.encodable("✔…▸", io.StringIO()))
+
+    def test_the_ascii_list_says_the_same_thing(self):
+        tasks = [{"t": "lire le config", "s": "done"},
+                 {"t": "patcher", "s": "doing", "since": BASE - 134},
+                 {"t": "tester", "s": "todo"}]
+        with mock.patch.object(self.tk, "ASCII", True), \
+                mock.patch.dict(os.environ,
+                                {"COLUMNS": "80", "NO_COLOR": "1",
+                                 "TERM": "dumb"}, clear=False):
+            out = self.tk.render(tasks, now=BASE)
+        self.assertEqual(out.splitlines(), [
+            "Tasks 1/3",
+            "x 1 lire le config",
+            "> 2 patcher  2m14s",
+            "o 3 tester"])
+        self.assertTrue(out.isascii())
+
+    def test_the_ascii_ellipsis_is_counted_in_the_truncation(self):
+        with mock.patch.object(self.tk, "ASCII", True), \
+                mock.patch.dict(os.environ,
+                                {"COLUMNS": "20", "NO_COLOR": "1",
+                                 "TERM": "dumb"}, clear=False):
+            line = self.tk.render([{"t": "z" * 80, "s": "todo"}]).splitlines()[1]
+        self.assertEqual(len(line), 20)
+        self.assertTrue(line.endswith("..."), line)
+
+    def test_the_json_stays_valid_when_the_console_is_ascii_only(self):
+        with mock.patch.object(self.tk, "ASCII", True):
+            payload = json.dumps([{"t": "Générer", "s": "todo"}],
+                                 ensure_ascii=self.tk.ASCII)
+        self.assertTrue(payload.isascii())
+        self.assertEqual(json.loads(payload)[0]["t"], "Générer")
+
+    def test_emit_never_raises_on_a_character_the_stream_refuses(self):
+        class Refuses(io.StringIO):
+            encoding = "ascii"
+
+            def write(self, text):
+                text.encode("ascii")  # raises, exactly as a cp1252 stream does
+                return io.StringIO.write(self, text)
+
+        stream = Refuses()
+        self.tk.emit("✔ 1 Générer", stream)  # must not raise
+        self.assertIn("1 G", stream.getvalue())
+
+
+# --- defect: the project root fell apart without git ---------------------
+#
+# Reported from a Windows 11 / PowerShell install where git was not on the
+# PATH: the list re-forked every time the agent stepped into a subdirectory,
+# because os.getcwd() was the whole fallback.
+
+class ProjectRootWithoutGit(Base):
+
+    def setUp(self):
+        Base.setUp(self)
+        # os.getcwd() resolves symlinks and the temp directory may be one, so
+        # compare against the resolved path or the assertion tests the symlink.
+        self.work = os.path.realpath(self.work)
+        self.sub = os.path.join(self.work, "src", "deep")
+        os.makedirs(self.sub)
+
+    def no_git(self, **extra):
+        """An environment with no git to be found anywhere on the PATH."""
+        e = {"PATH": os.path.join(self.tmp, "empty-path")}
+        e.update(extra)
+        return e
+
+    def run_in(self, where, *args, **kwargs):
+        return subprocess.run(
+            [sys.executable, TK] + list(args),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True, cwd=where,
+            env=self.env(**kwargs.pop("env", {})), **kwargs)
+
+    def test_a_marker_file_identifies_the_root_when_git_is_missing(self):
+        open(os.path.join(self.work, "pyproject.toml"), "w").close()
+        with mock.patch.dict(os.environ, self.no_git(), clear=False):
+            os.chdir(self.sub)
+            self.assertEqual(self.tk.project_root(), self.work)
+
+    def test_every_marker_counts(self):
+        for marker in self.tk.MARKERS:
+            target = os.path.join(self.work, marker)
+            os.makedirs(target) if marker in (".git", ".hg") else \
+                open(target, "w").close()
+            self.assertEqual(self.tk.marker_root(self.sub), self.work, marker)
+            shutil.rmtree(target, True)
+            if os.path.exists(target):
+                os.remove(target)
+
+    def test_no_marker_anywhere_falls_back_to_the_working_directory(self):
+        with mock.patch.dict(os.environ, self.no_git(), clear=False):
+            os.chdir(self.sub)
+            self.assertEqual(self.tk.project_root(), self.sub)
+
+    def test_the_nearest_marker_wins_over_a_farther_one(self):
+        open(os.path.join(self.work, "package.json"), "w").close()
+        middle = os.path.dirname(self.sub)
+        open(os.path.join(middle, "pyproject.toml"), "w").close()
+        self.assertEqual(self.tk.marker_root(self.sub), middle)
+
+    def test_the_walk_stops_at_the_filesystem_root(self):
+        # It must terminate rather than loop on "/" forever.
+        self.assertIn(self.tk.marker_root(os.sep), ("", os.sep))
+
+    def test_end_to_end_a_subdirectory_shares_the_list_without_git(self):
+        open(os.path.join(self.work, "pyproject.toml"), "w").close()
+        self.run_in(self.work, "add", "a", env=self.no_git())
+        out = self.run_in(self.sub, "add", "b", env=self.no_git())
+        self.assertEqual(out.returncode, 0)
+        self.assertIn("Tasks 0/2", out.stdout)
+        self.assertIn(" a", out.stdout)
+
+    def test_the_old_behaviour_is_what_broke(self):
+        # Without the walk, the same two calls land in two different files.
+        open(os.path.join(self.work, "pyproject.toml"), "w").close()
+        with mock.patch.dict(os.environ, self.no_git(), clear=False):
+            os.chdir(self.sub)
+            self.assertNotEqual(self.tk.cwd(), self.tk.project_root())
+
+    def test_a_deleted_working_directory_does_not_crash(self):
+        with mock.patch.object(self.tk.os, "getcwd",
+                               side_effect=OSError("gone")):
+            self.assertEqual(self.tk.cwd(), self.tk.HOME)
+
+
+class ProjectRootOverride(Base):
+    """TICKMARK_ROOT: the only answer a wandering working directory cannot move."""
+
+    def test_it_wins_over_git_and_over_the_walk(self):
+        pinned = os.path.join(self.tmp, "pinned")
+        os.makedirs(pinned)
+        self.tk.ROOT_OVERRIDE = pinned
+        self.assertEqual(self.tk.project_root(), pinned)
+
+    def test_the_list_follows_the_pin_from_anywhere(self):
+        pinned = os.path.join(self.tmp, "pinned")
+        elsewhere = os.path.join(self.tmp, "elsewhere")
+        os.makedirs(pinned)
+        os.makedirs(elsewhere)
+        self.run_tk("add", "a", env={"TICKMARK_ROOT": pinned})
+        out = subprocess.run(
+            [sys.executable, TK, "--json"], stdout=subprocess.PIPE,
+            universal_newlines=True, cwd=elsewhere,
+            env=self.env(TICKMARK_ROOT=pinned))
+        self.assertEqual([t["t"] for t in json.loads(out.stdout)], ["a"])
+
+    def test_a_relative_pin_is_resolved_once_not_re_resolved_per_call(self):
+        # Two calls from two directories must hash to the same file.
+        e = dict(os.environ)
+        e["TICKMARK_ROOT"] = "~"
+        with mock.patch.dict(os.environ, e, clear=True):
+            module = import_tk()
+        self.assertEqual(module.ROOT_OVERRIDE, os.path.expanduser("~"))
+
+
 # --- store robustness ----------------------------------------------------
 
 class StoreRobustness(Base):
@@ -352,21 +562,38 @@ class VisibleContract(Base):
             self.assertIn("Tasks ", out, args)
             self.assertIn(" a", out, args)
 
+    # The additive keys, so the assertions below state a contract instead of a
+    # frozen shape: "t" and "s" are the contract, the rest rides on top.
+    EXTRA = ("since", "elapsed_seconds", "agent")
+
+    def core(self, tasks):
+        return [{k: v for k, v in t.items() if k not in self.EXTRA}
+                for t in tasks]
+
     def test_json_keys_and_states(self):
         self.run_tk("add", "a", "b", "c")
         self.run_tk("go", "2")
         self.run_tk("ok", "1")
         tasks = json.loads(self.run_tk("--json").stdout)
-        # `since` is additive and rides on the task in progress only. Everything
-        # this test locked before still holds: same keys, same states, same
-        # order — and now also which task is allowed the extra key.
-        self.assertEqual(
-            [{k: v for k, v in t.items() if k != "since"} for t in tasks],
-            [{"t": "a", "s": "done"},
-             {"t": "b", "s": "doing"},
-             {"t": "c", "s": "todo"}])
-        self.assertEqual([sorted(t) for t in tasks],
-                         [["s", "t"], ["s", "since", "t"], ["s", "t"]])
+        self.assertEqual(self.core(tasks),
+                         [{"t": "a", "s": "done"},
+                          {"t": "b", "s": "doing"},
+                          {"t": "c", "s": "todo"}])
+        # Which task is allowed which extra key: only the one in progress is
+        # running, only one that actually ran has a duration to keep, and "a"
+        # was ticked off without ever being started.
+        self.assertEqual([sorted(set(t) - {"t", "s"}) for t in tasks],
+                         [[], ["since"], []])
+
+    def test_a_task_that_ran_keeps_its_duration_and_nothing_else_moves(self):
+        self.run_tk("add", "a", "b")
+        self.run_tk("go", "1")
+        self.run_tk("ok", "1")
+        tasks = json.loads(self.run_tk("--json").stdout)
+        self.assertEqual(self.core(tasks),
+                         [{"t": "a", "s": "done"}, {"t": "b", "s": "todo"}])
+        self.assertEqual(sorted(set(tasks[0]) - {"t", "s"}), ["elapsed_seconds"])
+        self.assertNotIn("since", tasks[0])
 
     def test_new_clears_the_list(self):
         self.run_tk("add", "a")
@@ -636,6 +863,278 @@ class DurationLifecycle(Base):
         tasks = self.tk.load()
         tasks[index]["since"] = value
         self.tk.save(tasks)
+
+
+class DurationKept(Base):
+    """What a task took is written down when it closes, not thrown away.
+
+    Measured over a real agent session: eight rendered durations out of eight
+    read 0s, because an agent calls tk at transitions only and no render ever
+    catches a step part-way through. The live duration was correct and useless.
+    """
+
+    def setUp(self):
+        Base.setUp(self)
+        self.run_tk("add", "a", "b", "c")
+
+    def tasks(self):
+        return json.loads(self.run_tk("--json").stdout)
+
+    def start(self, index, seconds_ago):
+        """Put task `index` in progress, started `seconds_ago` ago.
+
+        The recorded value can land one second late: `since` is a whole second
+        and tk closes the task against a clock that may have ticked in between.
+        The assertions below allow for that rather than race it.
+        """
+        self.run_tk("go", str(index + 1))
+        tasks = self.tk.load()
+        tasks[index]["since"] = int(time.time()) - seconds_ago
+        self.tk.save(tasks)
+
+    def test_ok_keeps_how_long_the_task_ran(self):
+        self.start(0, 134)
+        self.run_tk("ok", "1")
+        self.assertAlmostEqual(self.tasks()[0]["elapsed_seconds"], 134, delta=2)
+
+    def test_next_keeps_it_too(self):
+        self.start(0, 3600 * 2 + 60 * 7)
+        self.run_tk("next")
+        a, b, _ = self.tasks()
+        self.assertAlmostEqual(a["elapsed_seconds"], 3600 * 2 + 60 * 7, delta=2)
+        self.assertEqual(b["s"], "doing")
+
+    def test_the_running_stamp_is_still_dropped(self):
+        self.start(0, 60)
+        self.run_tk("ok", "1")
+        self.assertNotIn("since", self.tasks()[0])
+
+    def test_a_task_ticked_off_without_being_started_keeps_nothing(self):
+        self.run_tk("ok", "1")
+        self.assertNotIn("elapsed_seconds", self.tasks()[0])
+
+    def test_an_unreadable_stamp_records_nothing_rather_than_garbage(self):
+        self.tk.save([{"t": "a", "s": "doing", "since": "yesterday"}])
+        self.run_tk("ok", "1")
+        task = self.tasks()[0]
+        self.assertEqual(task["s"], "done")
+        self.assertNotIn("elapsed_seconds", task)
+
+    def test_ticking_a_finished_task_again_does_not_wipe_its_duration(self):
+        self.start(0, 134)
+        self.run_tk("ok", "1")
+        kept = self.tasks()[0]["elapsed_seconds"]
+        self.run_tk("ok", "1")
+        self.assertEqual(self.tasks()[0]["elapsed_seconds"], kept)
+
+    def test_a_finished_task_shows_what_it_took(self):
+        # Far enough from a minute boundary that a one-second slip cannot
+        # change the two digits this asserts.
+        self.start(0, 3600 * 8 + 60 * 7 + 30)
+        self.run_tk("ok", "1")
+        self.assertEqual(self.run_tk().stdout.splitlines()[1],
+                         "\u2714 1 a  8h07m")
+
+    def test_it_costs_no_extra_line(self):
+        self.start(0, 134)
+        self.assertEqual(len(self.run_tk("ok", "1").stdout.splitlines()), 4)
+
+    def test_the_duration_is_read_from_the_store_not_the_clock(self):
+        # Unlike the live one, it must not move between two reprints.
+        self.tk.save([{"t": "a", "s": "done", "elapsed_seconds": 134}])
+        first = self.run_tk().stdout
+        second = self.run_tk().stdout
+        self.assertEqual(first, second)
+        self.assertIn("2m14s", first)
+
+    def test_a_corrupt_recorded_duration_prints_the_line_without_it(self):
+        for bad in ("soon", None, True, [], {}, float("nan"), float("inf")):
+            self.tk.save([{"t": "a", "s": "done", "elapsed_seconds": bad}])
+            out = self.run_tk()
+            self.assertEqual(out.returncode, 0, repr(bad))
+            self.assertEqual(out.stdout.splitlines()[1], "\u2714 1 a", repr(bad))
+
+    def test_a_todo_task_carrying_a_stray_duration_stays_silent(self):
+        self.tk.save([{"t": "a", "s": "todo", "elapsed_seconds": 134}])
+        self.assertEqual(self.run_tk().stdout.splitlines()[1], "\u25cb 1 a")
+
+    def test_an_older_store_reads_and_renders_exactly_as_it_did(self):
+        self.tk.save([{"t": "a", "s": "done"}, {"t": "b", "s": "doing"}])
+        out = self.run_tk()
+        self.assertEqual(out.stdout.splitlines()[1:],
+                         ["\u2714 1 a", "\u25b8 2 b"])
+        self.assertEqual(json.loads(self.run_tk("--json").stdout),
+                         [{"t": "a", "s": "done"}, {"t": "b", "s": "doing"}])
+
+
+class Stats(Base):
+    """tk stats: the point of keeping the durations at all."""
+
+    def seed(self, *durations):
+        self.tk.save([{"t": "t%d" % i, "s": "done", "elapsed_seconds": d}
+                      for i, d in enumerate(durations)])
+
+    def line(self):
+        out = self.run_tk("stats")
+        self.assertEqual(out.returncode, 0)
+        return out.stdout.splitlines()[-1]
+
+    def test_it_reports_count_total_median_and_slowest(self):
+        self.seed(60, 134, 3600)
+        self.assertEqual(self.line(), "3 done in 1h03m | median 2m14s "
+                                      "| slowest 1h00m")
+
+    def test_an_even_count_takes_the_middle_of_the_two_middles(self):
+        self.seed(60, 100, 200, 3600)
+        self.assertIn("median 2m30s", self.line())
+
+    def test_it_reprints_the_list_like_every_other_command(self):
+        self.seed(134)
+        out = self.run_tk("stats").stdout
+        self.assertIn("Tasks 1/1", out)
+        self.assertIn("t0", out)
+
+    def test_a_list_with_nothing_finished_says_so_instead_of_lying(self):
+        self.run_tk("add", "a")
+        self.assertEqual(self.line(), "No recorded duration yet.")
+
+    def test_an_older_store_says_so_too_rather_than_reporting_zero(self):
+        self.tk.save([{"t": "a", "s": "done"}])
+        self.assertEqual(self.line(), "No recorded duration yet.")
+
+    def test_unfinished_tasks_are_not_counted(self):
+        self.tk.save([{"t": "a", "s": "done", "elapsed_seconds": 134},
+                      {"t": "b", "s": "todo", "elapsed_seconds": 99999},
+                      {"t": "c", "s": "doing", "elapsed_seconds": 99999}])
+        self.assertIn("1 done in 2m14s", self.line())
+
+    def test_corrupt_durations_are_skipped_not_crashed_on(self):
+        self.tk.save([{"t": "a", "s": "done", "elapsed_seconds": 134},
+                      {"t": "b", "s": "done", "elapsed_seconds": "ages"}])
+        self.assertIn("1 done in 2m14s", self.line())
+
+    def test_an_empty_list_is_not_an_error(self):
+        out = self.run_tk("stats")
+        self.assertEqual(out.returncode, 0)
+        self.assertIn("No tasks yet", out.stdout)
+
+    def test_it_does_not_write_to_the_store(self):
+        self.seed(134)
+        path = self.tk.state_path()
+        with open(path) as f:
+            before = f.read()
+        self.run_tk("stats")
+        with open(path) as f:
+            self.assertEqual(f.read(), before)
+
+    def test_the_french_line(self):
+        self.seed(134)
+        out = self.run_tk("stats", env={"LC_ALL": "fr_FR.UTF-8"})
+        self.assertIn("1 terminees en 2m14s", out.stdout)
+
+
+class WholeSeconds(Base):
+    """The one validator both durations go through."""
+
+    def test_it_reads_a_number(self):
+        self.assertEqual(self.tk.whole_seconds(134), 134)
+        self.assertEqual(self.tk.whole_seconds(134.9), 134)
+
+    def test_a_negative_value_reads_as_zero(self):
+        self.assertEqual(self.tk.whole_seconds(-500), 0)
+
+    def test_anything_that_is_not_a_number_reads_as_none(self):
+        for bad in (None, "", "134", True, False, [], {}, float("nan"),
+                    float("inf")):
+            self.assertIsNone(self.tk.whole_seconds(bad), repr(bad))
+
+    def test_format_duration_takes_a_count_straight(self):
+        self.assertEqual(self.tk.format_duration(134), "2m14s")
+        self.assertEqual(self.tk.format_duration(0), "0s")
+        self.assertEqual(self.tk.format_duration("soon"), "")
+
+
+class AgentName(Base):
+    """An optional owner per task, for when sub-agents share one list."""
+
+    def tasks(self):
+        return json.loads(self.run_tk("--json").stdout)
+
+    def test_no_agent_anywhere_changes_nothing(self):
+        self.run_tk("add", "a")
+        self.assertEqual(self.tasks(), [{"t": "a", "s": "todo"}])
+        self.assertEqual(self.run_tk().stdout.splitlines()[1], "\u25cb 1 a")
+
+    def test_the_flag_tags_what_it_adds(self):
+        self.run_tk("add", "--agent", "Scanner", "a", "b")
+        self.assertEqual([t.get("agent") for t in self.tasks()],
+                         ["Scanner", "Scanner"])
+
+    def test_the_flag_is_not_mistaken_for_a_subject(self):
+        self.run_tk("add", "--agent", "Scanner", "a")
+        self.assertEqual([t["t"] for t in self.tasks()], ["a"])
+
+    def test_the_equals_form_works_too(self):
+        self.run_tk("add", "--agent=CV-Agent", "a")
+        self.assertEqual(self.tasks()[0]["agent"], "CV-Agent")
+
+    def test_the_environment_tags_without_a_flag(self):
+        self.run_tk("add", "a", env={"TICKMARK_AGENT": "Scanner"})
+        self.assertEqual(self.tasks()[0]["agent"], "Scanner")
+
+    def test_the_flag_wins_over_the_environment(self):
+        self.run_tk("add", "--agent", "Flag", "a",
+                    env={"TICKMARK_AGENT": "Env"})
+        self.assertEqual(self.tasks()[0]["agent"], "Flag")
+
+    def test_picking_a_task_up_stamps_who_picked_it_up(self):
+        self.run_tk("add", "a", "b")
+        self.run_tk("go", "2", env={"TICKMARK_AGENT": "CV-Agent"})
+        a, b = self.tasks()
+        self.assertEqual(b["agent"], "CV-Agent")
+        self.assertNotIn("agent", a)
+
+    def test_an_untagged_go_leaves_an_existing_owner_alone(self):
+        self.run_tk("add", "--agent", "Scanner", "a")
+        self.run_tk("go", "1")
+        self.assertEqual(self.tasks()[0]["agent"], "Scanner")
+
+    def test_the_name_is_rendered_before_the_subject(self):
+        self.run_tk("add", "--agent", "Scanner", "Scan Ashby")
+        self.assertEqual(self.run_tk().stdout.splitlines()[1],
+                         "\u25cb 1 [Scanner] Scan Ashby")
+
+    def test_it_survives_being_ticked_off_with_the_duration(self):
+        self.run_tk("add", "--agent", "Scanner", "a")
+        self.run_tk("go", "1")
+        self.run_tk("ok", "1")
+        task = self.tasks()[0]
+        self.assertEqual((task["s"], task["agent"]), ("done", "Scanner"))
+
+    def test_it_costs_no_extra_line(self):
+        self.run_tk("add", "--agent", "Scanner", "a", "b")
+        self.assertEqual(len(self.run_tk().stdout.splitlines()), 3)
+
+    def test_a_name_that_is_not_a_string_is_ignored_not_printed(self):
+        self.tk.save([{"t": "a", "s": "todo", "agent": {"who": "?"}},
+                      {"t": "b", "s": "todo", "agent": ""}])
+        out = self.run_tk()
+        self.assertEqual(out.returncode, 0)
+        self.assertEqual(out.stdout.splitlines()[1:],
+                         ["\u25cb 1 a", "\u25cb 2 b"])
+
+    def test_a_dangling_flag_is_dropped_rather_than_added_as_a_subject(self):
+        result = self.run_tk("add", "a", "--agent")
+        self.assertEqual([t["t"] for t in self.tasks()], ["a"])
+        self.assertEqual(result.returncode, 0)
+
+    def test_the_name_counts_against_the_terminal_width(self):
+        with mock.patch.dict(os.environ, {"COLUMNS": "24", "NO_COLOR": "1",
+                                          "TERM": "dumb"}, clear=False):
+            line = self.tk.render([{"t": "z" * 60, "s": "todo",
+                                    "agent": "Scanner"}]).splitlines()[1]
+        self.assertLessEqual(len(line), 24)
+        self.assertTrue(line.startswith("\u25cb 1 [Scanner] "), line)
 
 
 class StatusLineDuration(Base):
