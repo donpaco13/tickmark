@@ -276,6 +276,117 @@ class Rendering(Base):
         self.assertNotIn("\033[", self.run_pty(NO_COLOR="1"))
 
 
+# --- defect: the project root fell apart without git ---------------------
+#
+# Reported from a Windows 11 / PowerShell install where git was not on the
+# PATH: the list re-forked every time the agent stepped into a subdirectory,
+# because os.getcwd() was the whole fallback.
+
+class ProjectRootWithoutGit(Base):
+
+    def setUp(self):
+        Base.setUp(self)
+        # os.getcwd() resolves symlinks and the temp directory may be one, so
+        # compare against the resolved path or the assertion tests the symlink.
+        self.work = os.path.realpath(self.work)
+        self.sub = os.path.join(self.work, "src", "deep")
+        os.makedirs(self.sub)
+
+    def no_git(self, **extra):
+        """An environment with no git to be found anywhere on the PATH."""
+        e = {"PATH": os.path.join(self.tmp, "empty-path")}
+        e.update(extra)
+        return e
+
+    def run_in(self, where, *args, **kwargs):
+        return subprocess.run(
+            [sys.executable, TK] + list(args),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True, cwd=where,
+            env=self.env(**kwargs.pop("env", {})), **kwargs)
+
+    def test_a_marker_file_identifies_the_root_when_git_is_missing(self):
+        open(os.path.join(self.work, "pyproject.toml"), "w").close()
+        with mock.patch.dict(os.environ, self.no_git(), clear=False):
+            os.chdir(self.sub)
+            self.assertEqual(self.tk.project_root(), self.work)
+
+    def test_every_marker_counts(self):
+        for marker in self.tk.MARKERS:
+            target = os.path.join(self.work, marker)
+            os.makedirs(target) if marker in (".git", ".hg") else \
+                open(target, "w").close()
+            self.assertEqual(self.tk.marker_root(self.sub), self.work, marker)
+            shutil.rmtree(target, True)
+            if os.path.exists(target):
+                os.remove(target)
+
+    def test_no_marker_anywhere_falls_back_to_the_working_directory(self):
+        with mock.patch.dict(os.environ, self.no_git(), clear=False):
+            os.chdir(self.sub)
+            self.assertEqual(self.tk.project_root(), self.sub)
+
+    def test_the_nearest_marker_wins_over_a_farther_one(self):
+        open(os.path.join(self.work, "package.json"), "w").close()
+        middle = os.path.dirname(self.sub)
+        open(os.path.join(middle, "pyproject.toml"), "w").close()
+        self.assertEqual(self.tk.marker_root(self.sub), middle)
+
+    def test_the_walk_stops_at_the_filesystem_root(self):
+        # It must terminate rather than loop on "/" forever.
+        self.assertIn(self.tk.marker_root(os.sep), ("", os.sep))
+
+    def test_end_to_end_a_subdirectory_shares_the_list_without_git(self):
+        open(os.path.join(self.work, "pyproject.toml"), "w").close()
+        self.run_in(self.work, "add", "a", env=self.no_git())
+        out = self.run_in(self.sub, "add", "b", env=self.no_git())
+        self.assertEqual(out.returncode, 0)
+        self.assertIn("Tasks 0/2", out.stdout)
+        self.assertIn(" a", out.stdout)
+
+    def test_the_old_behaviour_is_what_broke(self):
+        # Without the walk, the same two calls land in two different files.
+        open(os.path.join(self.work, "pyproject.toml"), "w").close()
+        with mock.patch.dict(os.environ, self.no_git(), clear=False):
+            os.chdir(self.sub)
+            self.assertNotEqual(self.tk.cwd(), self.tk.project_root())
+
+    def test_a_deleted_working_directory_does_not_crash(self):
+        with mock.patch.object(self.tk.os, "getcwd",
+                               side_effect=OSError("gone")):
+            self.assertEqual(self.tk.cwd(), self.tk.HOME)
+
+
+class ProjectRootOverride(Base):
+    """TICKMARK_ROOT: the only answer a wandering working directory cannot move."""
+
+    def test_it_wins_over_git_and_over_the_walk(self):
+        pinned = os.path.join(self.tmp, "pinned")
+        os.makedirs(pinned)
+        self.tk.ROOT_OVERRIDE = pinned
+        self.assertEqual(self.tk.project_root(), pinned)
+
+    def test_the_list_follows_the_pin_from_anywhere(self):
+        pinned = os.path.join(self.tmp, "pinned")
+        elsewhere = os.path.join(self.tmp, "elsewhere")
+        os.makedirs(pinned)
+        os.makedirs(elsewhere)
+        self.run_tk("add", "a", env={"TICKMARK_ROOT": pinned})
+        out = subprocess.run(
+            [sys.executable, TK, "--json"], stdout=subprocess.PIPE,
+            universal_newlines=True, cwd=elsewhere,
+            env=self.env(TICKMARK_ROOT=pinned))
+        self.assertEqual([t["t"] for t in json.loads(out.stdout)], ["a"])
+
+    def test_a_relative_pin_is_resolved_once_not_re_resolved_per_call(self):
+        # Two calls from two directories must hash to the same file.
+        e = dict(os.environ)
+        e["TICKMARK_ROOT"] = "~"
+        with mock.patch.dict(os.environ, e, clear=True):
+            module = import_tk()
+        self.assertEqual(module.ROOT_OVERRIDE, os.path.expanduser("~"))
+
+
 # --- store robustness ----------------------------------------------------
 
 class StoreRobustness(Base):
