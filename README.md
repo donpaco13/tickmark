@@ -2,14 +2,48 @@
 
 ![tk add, tk go 1, tk next updating a live checklist in the terminal](assets/demo.svg)
 
-You can't tell where your agent is. It's mid-task, the terminal is a wall of
-scrolling text, and the only status update arrives as a summary once the work
-is already done. Agents that ship a native todo tool don't have this problem:
-they render a live checklist you can glance at. Most do now — the table below
-says which. Some still don't, and that's where you're flying blind.
+Your agent is eight minutes into a task and you can't tell where it is. The
+terminal is a wall of scrolling text, and the only status report arrives once
+the work is already done.
 
-`tk` gives those one. No API, no daemon, no plugin system: one Python file
-with no dependencies, called as a shell command.
+Ten of the seventeen terminal agents in the table below print a live checklist
+of their own. Five don't — `agy`, Aider, Goose, Amp, Cline CLI — and there the
+transcript is all you get. Where a native list does exist it lives in the
+scroll or in the agent's own TUI: you have to be watching that pane, it costs
+lines every time it updates, and none of the ten shows how long the step in
+progress has been running.
+
+`tk` writes the list to a JSON file instead of printing it at you. A status
+line reads that file and repaints in place: no added lines, no tokens, and a
+step stuck for four minutes says so before you think to ask. One Python file,
+no dependencies, called as a shell command.
+
+## Amp removed their TODOs
+
+Amp shipped TODOs, then [took them out](https://ampcode.com/news/todos-are-done)
+on 12 January 2026. Their reason: the agent tracks its own work in a single
+thread fine without them, and the list cost time, tokens and screen space.
+
+The cost is real, and worse than it looks. One `tk` render is N+1 lines and the
+agent calls it about 2N+2 times, so the list burns roughly 2(N+1)² lines of
+scrollback. Measured in real `agy` sessions: 21% of all tool output at five
+steps, 28% at eight. Anything that prints a checklist into the transcript pays
+that, `tk` included.
+
+Amp asked whether the agent needs a TODO list to do its work. It doesn't. `tk`
+is for the person watching, and the surface it was built for is the status line,
+which repaints one line in place, adds no scrollback and never enters the
+model's context.
+
+Two consequences, and the second one had to be measured before anyone believed
+it:
+
+- Keep the list short. Six steps is where the in-stream cost stops being worth
+  it. An agent that wants twelve wanted three phases.
+- The duration only exists in a status line. In the transcript it always reads
+  `0s`: the agent calls `tk` at the transitions and nowhere in between, so no
+  render catches a step mid-flight. Eight readings out of eight in the measured
+  session said `0s`.
 
 ## Install
 
@@ -19,7 +53,11 @@ cd tickmark && ./install.sh
 ```
 
 This copies `tk` to `~/.local/bin` and tells you which agent instruction files
-it found. Then append [`AGENTS.md`](AGENTS.md) to the one your agent reads:
+it found. `install.sh` is a POSIX shell script; on Windows you put `tk` on your
+`PATH` yourself for now.
+
+Then append [`AGENTS.md`](AGENTS.md) to the file your agent reads — if it needs
+it:
 
 | Agent | Instruction file | Native checklist? | Source |
 | --- | --- | --- | --- |
@@ -66,10 +104,16 @@ and shows the state. That matters: it's one tool call for the agent instead of
 two, which is the difference between an agent that keeps the list up to date and
 one that stops bothering.
 
-The step in progress shows how long it has been running, at the end of its own
-line: `▸ 2 patcher le handler  2m14s`. A step stuck for eight minutes says
-so before you think to ask. It adds no line to the output, and it drops out
-rather than eat into the subject when the terminal is too narrow for both.
+The step in progress carries how long it has been running, at the end of its own
+line: `▸ 2 patcher le handler  2m14s`. It adds no line to the output, and it
+drops out rather than eat into the subject when the terminal is too narrow for
+both. Read it in a status line, not in the transcript — see above for why.
+
+## Status lines
+
+Ready-made snippets for Claude Code, starship, tmux and powerlevel10k, all
+reading `roots.json` directly with no `git`/`tk` call per repaint: see
+[`integrations/`](integrations/).
 
 ## How it works
 
@@ -100,15 +144,10 @@ display for the human in the loop. If you want your agent to keep durable state
 across sessions, use a real tracker; if you want to see what it's doing right
 now, use this.
 
-## Status lines
-
-Ready-made snippets for Claude Code, starship, tmux and powerlevel10k, all
-reading `roots.json` directly with no `git`/`tk` call per repaint: see
-[`integrations/`](integrations/).
-
 ## Requirements
 
-Python 3.6+. No packages. Works anywhere a shell does.
+Python 3.6+. No packages. macOS, Linux and Windows — see the note under
+[Install](#install) for the Windows path.
 
 ## License
 
