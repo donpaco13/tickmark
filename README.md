@@ -49,6 +49,12 @@ it:
 ## Install
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/donpaco13/tickmark/main/packaging/get.sh | sh
+```
+
+Or from a clone:
+
+```sh
 git clone https://github.com/donpaco13/tickmark
 cd tickmark && ./install.sh
 ```

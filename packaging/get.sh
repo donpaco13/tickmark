@@ -14,13 +14,18 @@ BIN="${TICKMARK_BIN:-$HOME/.local/bin}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+command -v python3 >/dev/null 2>&1 || { echo "tickmark needs python3 on your PATH." >&2; exit 1; }
 command -v curl >/dev/null 2>&1 || { echo "tickmark needs curl on your PATH." >&2; exit 1; }
 
 if [ -n "${TICKMARK_VERSION:-}" ]; then
   VERSION="$TICKMARK_VERSION"
 else
-  VERSION="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-    | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name": *"v?([^"]+)".*/\1/')"
+  # Try release redirect first to avoid GitHub API unauthenticated rate limits (60 req/hr)
+  VERSION="$(curl -fsSLI -o /dev/null -w "%{url_effective}" "https://github.com/$REPO/releases/latest" 2>/dev/null | sed -n -E 's|.*/tag/v?([^/]+)$|\1|p')"
+  if [ -z "$VERSION" ]; then
+    VERSION="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
+      | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name": *"v?([^"]+)".*/\1/')"
+  fi
 fi
 [ -n "$VERSION" ] || {
   echo "Could not resolve a tickmark version from GitHub. Set TICKMARK_VERSION explicitly." >&2
@@ -56,4 +61,4 @@ echo
 echo "Next: paste AGENTS.md into the instruction file your agent reads."
 echo "  curl -fsSL https://raw.githubusercontent.com/$REPO/main/AGENTS.md >> <that file>"
 echo
-echo "Then check it works:  tk add \"first step\" && tk"
+echo "Then check it works:  tk add \"first step\""
