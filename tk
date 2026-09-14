@@ -28,6 +28,13 @@ Design notes
 - The task in progress carries the epoch second it started, under "since". It
   is rendered at the end of that one line, so a step stuck for eight minutes
   says so on its own. Older lists have no "since" and simply show no duration.
+- Closing a task turns that stamp into "elapsed_seconds", kept for good. An
+  agent only calls tk at transitions, so nothing ever renders a step part-way
+  through and the live duration alone reads 0s every time. Kept, it feeds the
+  end of each finished line and `tk stats`.
+- A task can carry an optional "agent" name, for when several sub-agents work
+  one list at once. Both keys are additive: a store from an older tk reads
+  exactly as it did.
 """
 import hashlib
 import json
@@ -99,6 +106,10 @@ STRINGS = {
     "need_number": ("tk %s attend le numero d'une tache existante.",
                     "tk %s expects the number of an existing task."),
     "unknown": ("Commande inconnue : %s", "Unknown command: %s"),
+    "stats_none": ("Aucune duree enregistree pour l'instant.",
+                   "No recorded duration yet."),
+    "stats": ("%d terminees en %s | mediane %s | plus longue %s",
+              "%d done in %s | median %s | slowest %s"),
     "shifted": ("Numeros redistribues : utilise ceux ci-dessus, pas ceux que "
                 "tu avais en tete.",
                 "Numbers were reassigned: use the ones above, not the ones you "
@@ -113,6 +124,7 @@ USAGE = """tickmark %s - session task tracker
   tk next                                complete the current task, start the next
   tk rm <n> [<n> ...]                    remove one or more tasks
   tk new                                 clear the list
+  tk stats                               how long the finished tasks took
   tk                                     show the list
   tk --json                              show the list as JSON (for status lines)
 
@@ -327,8 +339,23 @@ def term_width():
     return 0
 
 
-def elapsed(since, now):
-    """How long the current task has been running, or "" when unknowable.
+def whole_seconds(value):
+    """`value` as a whole, non-negative number of seconds, or None.
+
+    Anything that is not a usable number reads as "no duration", never as an
+    error: the store can be hand-edited or written by another tool, and half a
+    list is better than none. A clock that went backwards reads as zero.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        return max(0, int(value))
+    except (ValueError, OverflowError):  # nan, inf
+        return None
+
+
+def format_duration(value):
+    """A number of seconds as 0s / 2m14s / 8h07m / 1d00h, or "".
 
     Five or six characters from one minute on, so the end of the line stays put
     between two reprints of the same list instead of dancing left and right.
@@ -336,25 +363,53 @@ def elapsed(since, now):
     otherwise move it every ten seconds; the leading one is not, because the
     shape to read at a glance is "2m14s". It gains a character when it gains a
     digit, once per scale.
-
-    Anything that is not a usable number reads as "no duration", never as an
-    error: the store can be hand-edited, and half a list is better than none.
     """
-    if isinstance(since, bool) or not isinstance(since, (int, float)):
+    count = whole_seconds(value)
+    if count is None:
         return ""
-    try:
-        seconds = int(now - since)
-    except (ValueError, OverflowError):  # nan, inf
-        return ""
-    if seconds < 0:  # a clock that went backwards, or a store from elsewhere
-        seconds = 0
-    if seconds < 60:
-        return "%ds" % seconds
-    if seconds < 3600:
-        return "%dm%02ds" % (seconds // 60, seconds % 60)
-    if seconds < 86400:
-        return "%dh%02dm" % (seconds // 3600, seconds % 3600 // 60)
-    return "%dd%02dh" % (seconds // 86400, seconds % 86400 // 3600)
+    if count < 60:
+        return "%ds" % count
+    if count < 3600:
+        return "%dm%02ds" % (count // 60, count % 60)
+    if count < 86400:
+        return "%dh%02dm" % (count // 3600, count % 3600 // 60)
+    return "%dd%02dh" % (count // 86400, count % 86400 // 3600)
+
+
+def elapsed(since, now):
+    """How long a task started at `since` has been running, or ""."""
+    return "" if whole_seconds(since) is None else format_duration(now - since)
+
+
+def finish(task, now):
+    """Close a task, keeping how long it actually took.
+
+    The duration used to be worked out in flight and dropped here. Measured
+    over a real agent session, eight rendered durations out of eight read 0s:
+    an agent calls tk at transitions only, so no render ever catches a step
+    part-way through. Written down at closing time it finally says something,
+    and `tk stats` reads it back.
+    """
+    since = task.pop("since", None)
+    task["s"] = "done"
+    if whole_seconds(since) is None:
+        return
+    ran = whole_seconds(now - since)
+    if ran is not None:
+        task["elapsed_seconds"] = ran
+
+
+def stats_line(tasks):
+    """One line of velocity, from the durations the finished tasks kept."""
+    kept = sorted(x for x in (whole_seconds(t.get("elapsed_seconds"))
+                              for t in tasks if t["s"] == "done")
+                  if x is not None)
+    if not kept:
+        return s("stats_none")
+    half = len(kept) // 2
+    median = kept[half] if len(kept) % 2 else (kept[half - 1] + kept[half]) // 2
+    return s("stats", len(kept), format_duration(sum(kept)),
+             format_duration(median), format_duration(kept[-1]))
 
 
 def render(tasks, now=None):
@@ -374,8 +429,13 @@ def render(tasks, now=None):
         tail = ""
         if t["s"] == "doing":
             duration = elapsed(t.get("since"), now)
-            if duration:
-                tail = GAP + duration
+        else:
+            # A finished task shows what it took. Only the one in progress is
+            # still counting, so only it reads the clock.
+            duration = format_duration(t.get("elapsed_seconds")) \
+                if t["s"] == "done" else ""
+        if duration:
+            tail = GAP + duration
         room = width - len(head) - len(tail)
         # A terminal too narrow for both drops the duration whole. Cutting it in
         # two would print a number that is not a number; shrinking the subject
@@ -422,6 +482,11 @@ def main():
         emit(json.dumps(tasks, ensure_ascii=ASCII))
         return 0
 
+    if cmd == "stats":
+        emit(render(tasks))
+        emit(stats_line(tasks))
+        return 0
+
     if cmd == "add":
         subjects = [x.strip() for x in rest if x.strip()]
         if not subjects:
@@ -453,14 +518,14 @@ def main():
         if not idx:
             emit(s("need_number", "ok"), sys.stderr)
             return 1
+        now = time.time()
         for i in idx:
-            tasks[i]["s"] = "done"
-            tasks[i].pop("since", None)
+            finish(tasks[i], now)
     elif cmd == "next":
+        now = time.time()
         for t in tasks:
             if t["s"] == "doing":
-                t["s"] = "done"
-                t.pop("since", None)
+                finish(t, now)
         for t in tasks:
             if t["s"] == "todo":
                 t["s"] = "doing"
