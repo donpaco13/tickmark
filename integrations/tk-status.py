@@ -163,7 +163,12 @@ def load_tasks(root):
     # split reads a file that isn't there and renders nothing - which is
     # exactly the setup where it matters most.
     name = hashlib.sha1(root.encode("utf-8")).hexdigest()[:16]
-    session = os.environ.get("TICKMARK_SESSION") or ""
+    session = (
+        os.environ.get("TICKMARK_SESSION")
+        or os.environ.get("AGENT_ID")
+        or os.environ.get("AGENT_NAME")
+        or ""
+    )
     if session:
         name += "-" + hashlib.sha1(session.encode("utf-8")).hexdigest()[:8]
     name += ".json"

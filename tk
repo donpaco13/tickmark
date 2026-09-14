@@ -55,10 +55,24 @@ LEGACY_STORE = os.path.join(HOME, ".local", "share", "agy-tasks")
 # and overwrite each other. Nothing in the environment tells them apart on its
 # own: a process session id changes between two calls of the same agent (an
 # agent CLI spawns a fresh shell per command), and a tty is absent as soon as
-# output is captured. So the split is opt-in, and whoever runs the agents sets
-# it once: TICKMARK_SESSION=$AGENT_ID. Unset, the list stays per project, and
+# output is captured.
+#
+# So we look for an identifier the runner already publishes. TICKMARK_SESSION
+# wins when set. Otherwise we fall back to the variables agent runners export
+# to name the agent they just started -- that covers the common case where
+# several agents share one checkout and nobody remembered to set anything.
+# A plain human shell exports none of these, so the list stays per project and
 # the file name is the one earlier versions wrote.
-SESSION = os.environ.get("TICKMARK_SESSION") or ""
+#
+# Why the fallback matters: opt-in alone reproduces the bug it was meant to
+# fix. An agent that forgets the variable silently joins another agent's list,
+# sees tasks it never created, and overwrites them on its next call.
+SESSION = (
+    os.environ.get("TICKMARK_SESSION")
+    or os.environ.get("AGENT_ID")
+    or os.environ.get("AGENT_NAME")
+    or ""
+)
 
 # Who is on a task, when several sub-agents share one list. Optional in every
 # sense: unset and passed no flag, tk writes nothing and prints nothing extra.
@@ -135,7 +149,8 @@ USAGE = """tickmark %s - session task tracker
   add and go also take --agent <name>, to say who is on the task.
 
 State: %s
-Set TICKMARK_SESSION to give parallel agents in one checkout separate lists.
+Parallel agents in one checkout get separate lists automatically (AGENT_ID).
+  Set TICKMARK_SESSION to override or to split a plain shell.
 Set TICKMARK_AGENT to tag every task a sub-agent adds or picks up.
 Set TICKMARK_ROOT to pin the project when the working directory is unreliable.
 """ % (__version__, STORE)
