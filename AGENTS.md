@@ -15,6 +15,8 @@ tk                                  reprint the list
 
 Rules:
 
+- If this CLI already prints a live checklist of its own, use that one and
+  ignore the rest of this file. Two lists side by side are worse than one.
 - **Never mark a step done in the command that performs it.** `tk ok 3` inside
   the command running the test claims the step passed before the test has said
   anything. Either run the work first and mark it after, or gate the marking on
@@ -22,8 +24,9 @@ Rules:
 - Don't collapse several steps into one command when work happens between them —
   a checklist that jumps three states at once shows nobody anything.
 - One step in progress at a time.
-- If this CLI already prints a live checklist of its own, use that instead and
-  ignore this file.
+- Six steps at most. Every command reprints the whole list, so the output cost
+  grows with the square of its length: a twelve-step list buries the reader in
+  reprints and tells them less. Work that needs twelve steps has three phases.
 - The list is per project. Several agents in one checkout share it unless
   whoever launches them sets `TICKMARK_SESSION` differently for each. It is a
   progress display, not a backlog.
