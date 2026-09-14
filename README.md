@@ -53,8 +53,10 @@ cd tickmark && ./install.sh
 ```
 
 This copies `tk` to `~/.local/bin` and tells you which agent instruction files
-it found. `install.sh` is a POSIX shell script; on Windows you put `tk` on your
-`PATH` yourself for now.
+it found. `install.sh` is a POSIX shell script. On Windows, run `.\install.ps1`
+instead — it does the same thing natively, plus a `tk.cmd` wrapper and the
+`PATH` entry. If your execution policy blocks it:
+`powershell -ExecutionPolicy Bypass -File install.ps1`.
 
 Then append [`AGENTS.md`](AGENTS.md) to the file your agent reads — if it needs
 it:
@@ -152,8 +154,7 @@ now, use this.
 
 ## Requirements
 
-Python 3.6+. No packages. macOS, Linux and Windows — see the note under
-[Install](#install) for the Windows path.
+Python 3.6+. No packages. macOS, Linux and Windows.
 
 ## License
 
