@@ -276,6 +276,105 @@ class Rendering(Base):
         self.assertNotIn("\033[", self.run_pty(NO_COLOR="1"))
 
 
+# --- defect: a glyph the console refused killed the whole command --------
+#
+# Reported from the same Windows install: on code page 1252 the marks raise
+# UnicodeEncodeError, the command dies, and the status line reading it goes
+# blank with nothing to explain why.
+
+class OutputEncoding(Base):
+
+    def test_a_cp1252_stream_refuses_the_marks(self):
+        """The platform fact the fix exists for, so it is not testing thin air."""
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+        with self.assertRaises(UnicodeEncodeError):
+            stream.write(self.tk.MARK["doing"])
+            stream.flush()
+
+    def test_a_narrow_console_no_longer_stops_the_command(self):
+        self.run_tk("add", "Générer les CVs adaptés")
+        for encoding in ("cp1252", "ascii", "latin-1"):
+            out = self.run_tk("go", "1", env={"PYTHONIOENCODING": encoding})
+            self.assertEqual(out.returncode, 0, encoding)
+            self.assertIn("Tasks 0/1", out.stdout, encoding)
+            self.assertEqual(out.stderr, "", encoding)
+
+    def test_the_marks_still_come_out_as_utf8(self):
+        self.run_tk("add", "a")
+        out = self.run_tk("go", "1", env={"PYTHONIOENCODING": "cp1252"})
+        self.assertIn("\u25b8", out.stdout)
+
+    def test_an_error_message_survives_the_same_console(self):
+        out = self.run_tk("frobnicate", env={"PYTHONIOENCODING": "cp1252"})
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("Unknown command", out.stderr)
+
+    def test_a_stream_that_cannot_take_the_marks_falls_back_to_ascii(self):
+        stream = mock.MagicMock()
+        stream.encoding = "cp1252"
+        stream.reconfigure.side_effect = AttributeError("no reconfigure here")
+        with mock.patch.object(sys, "stdout", stream), \
+                mock.patch.object(sys, "stderr", stream):
+            self.tk.setup_output()
+        self.assertTrue(self.tk.ASCII)
+
+    def test_a_stream_that_takes_utf8_keeps_the_marks(self):
+        stream = mock.MagicMock()
+        stream.encoding = "utf-8"
+        with mock.patch.object(sys, "stdout", stream), \
+                mock.patch.object(sys, "stderr", stream):
+            self.tk.setup_output()
+        self.assertFalse(self.tk.ASCII)
+
+    def test_a_stream_with_no_encoding_of_its_own_keeps_the_marks(self):
+        # io.StringIO, a test capture: takes any text, not a reason to degrade.
+        self.assertTrue(self.tk.encodable("✔…▸", io.StringIO()))
+
+    def test_the_ascii_list_says_the_same_thing(self):
+        tasks = [{"t": "lire le config", "s": "done"},
+                 {"t": "patcher", "s": "doing", "since": BASE - 134},
+                 {"t": "tester", "s": "todo"}]
+        with mock.patch.object(self.tk, "ASCII", True), \
+                mock.patch.dict(os.environ,
+                                {"COLUMNS": "80", "NO_COLOR": "1",
+                                 "TERM": "dumb"}, clear=False):
+            out = self.tk.render(tasks, now=BASE)
+        self.assertEqual(out.splitlines(), [
+            "Tasks 1/3",
+            "x 1 lire le config",
+            "> 2 patcher  2m14s",
+            "o 3 tester"])
+        self.assertTrue(out.isascii())
+
+    def test_the_ascii_ellipsis_is_counted_in_the_truncation(self):
+        with mock.patch.object(self.tk, "ASCII", True), \
+                mock.patch.dict(os.environ,
+                                {"COLUMNS": "20", "NO_COLOR": "1",
+                                 "TERM": "dumb"}, clear=False):
+            line = self.tk.render([{"t": "z" * 80, "s": "todo"}]).splitlines()[1]
+        self.assertEqual(len(line), 20)
+        self.assertTrue(line.endswith("..."), line)
+
+    def test_the_json_stays_valid_when_the_console_is_ascii_only(self):
+        with mock.patch.object(self.tk, "ASCII", True):
+            payload = json.dumps([{"t": "Générer", "s": "todo"}],
+                                 ensure_ascii=self.tk.ASCII)
+        self.assertTrue(payload.isascii())
+        self.assertEqual(json.loads(payload)[0]["t"], "Générer")
+
+    def test_emit_never_raises_on_a_character_the_stream_refuses(self):
+        class Refuses(io.StringIO):
+            encoding = "ascii"
+
+            def write(self, text):
+                text.encode("ascii")  # raises, exactly as a cp1252 stream does
+                return io.StringIO.write(self, text)
+
+        stream = Refuses()
+        self.tk.emit("✔ 1 Générer", stream)  # must not raise
+        self.assertIn("1 G", stream.getvalue())
+
+
 # --- defect: the project root fell apart without git ---------------------
 #
 # Reported from a Windows 11 / PowerShell install where git was not on the

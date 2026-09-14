@@ -20,6 +20,9 @@ Design notes
   further when several agents work in one checkout at once.
 - Every command reprints the full list. One call both updates the state and
   shows where things stand, which is exactly one tool call for the agent.
+- Output is reconfigured to UTF-8 before anything is printed, and falls back
+  to ASCII marks when the stream refuses. A checklist that degrades is worth
+  something; a command that dies on a glyph is worth nothing.
 - The state file is plain JSON on purpose: a status line, a prompt hook or
   another tool can read it without going through tk.
 - The task in progress carries the epoch second it started, under "since". It
@@ -65,6 +68,12 @@ if ROOT_OVERRIDE:
 MARKERS = (".git", "pyproject.toml", "package.json", ".hg")
 
 MARK = {"todo": "○", "doing": "▸", "done": "✔"}
+# What a console that cannot carry UTF-8 gets instead. Same keys: MARK is also
+# the set of states load() accepts, and that must not move.
+MARK_ASCII = {"todo": "o", "doing": ">", "done": "x"}
+CUT, CUT_ASCII = "…", "..."
+# Raised by setup_output() when the output stream cannot take the marks.
+ASCII = False
 COLOR = {"todo": "\033[2m", "doing": "\033[1;33m", "done": "\033[32m"}
 RESET = "\033[0m"
 
@@ -253,6 +262,55 @@ def save(tasks):
     os.replace(tmp, p)
 
 
+def encodable(text, stream):
+    """Can this stream carry these characters?
+
+    A stream with no encoding of its own — a StringIO, a test capture — takes
+    any text, so it is not a reason to give up the marks.
+    """
+    encoding = getattr(stream, "encoding", None)
+    if not encoding:
+        return True
+    try:
+        text.encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return False
+    return True
+
+
+def setup_output():
+    """Ask for UTF-8 on the way out, and settle for ASCII rather than fail.
+
+    A Windows console on code page 1252 raises UnicodeEncodeError on the marks
+    and on the ellipsis. The command then died over a glyph, and the status
+    line reading it went blank with nothing to explain why. tk must never fall
+    over on a display problem: the checklist degrades, it does not disappear.
+    """
+    global ASCII
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # no reconfigure, or not a text stream at all
+            pass
+    ASCII = not encodable("".join(MARK.values()) + CUT, sys.stdout)
+
+
+def emit(text, stream=None, end="\n"):
+    """Print, whatever the console turns out to be able to represent.
+
+    setup_output() has normally already made this impossible, but a stream can
+    still refuse a character, and a checklist with a question mark in it beats
+    a traceback where the checklist was.
+    """
+    stream = stream or sys.stdout
+    try:
+        print(text, file=stream, end=end)
+    except UnicodeEncodeError:
+        encoding = getattr(stream, "encoding", None) or "ascii"
+        print(text.encode(encoding, "replace").decode(encoding, "replace"),
+              file=stream, end=end)
+
+
 def use_color():
     """Colour only when a person is looking at a terminal."""
     return (sys.stdout.isatty() and not os.environ.get("NO_COLOR")
@@ -306,10 +364,12 @@ def render(tasks, now=None):
     color = use_color()
     if now is None:
         now = time.time()
+    marks = MARK_ASCII if ASCII else MARK
+    cut = CUT_ASCII if ASCII else CUT
     done = sum(1 for t in tasks if t["s"] == "done")
     lines = [s("count", done, len(tasks))]
     for i, t in enumerate(tasks, 1):
-        head = "%s %d " % (MARK[t["s"]], i)
+        head = "%s %d " % (marks[t["s"]], i)
         subject = t["t"]
         tail = ""
         if t["s"] == "doing":
@@ -326,7 +386,8 @@ def render(tasks, now=None):
         # ponytail: counts characters, not display columns. A subject in CJK or
         # emoji can still spill by a column; switch to wcwidth if that shows up.
         if width and room > 0 and len(subject) > room:
-            subject = subject[:room - 1] + "…" if room > 1 else "…"
+            subject = (subject[:room - len(cut)] + cut if room >= len(cut)
+                       else cut[:room])
         line = head + subject + tail
         lines.append(COLOR[t["s"]] + line + RESET if color else line)
     return "\n".join(lines)
@@ -342,34 +403,35 @@ def pick(tasks, args):
 
 
 def main():
+    setup_output()
     argv = sys.argv[1:]
     shifted = False
     cmd = argv[0] if argv else "ls"
     rest = argv[1:]
 
     if cmd in ("-h", "--help", "help"):
-        print(USAGE, end="")
+        emit(USAGE, end="")
         return 0
     if cmd in ("-V", "--version"):
-        print("tickmark %s" % __version__)
+        emit("tickmark %s" % __version__)
         return 0
 
     tasks = load()
 
     if cmd == "--json":
-        print(json.dumps(tasks, ensure_ascii=False))
+        emit(json.dumps(tasks, ensure_ascii=ASCII))
         return 0
 
     if cmd == "add":
         subjects = [x.strip() for x in rest if x.strip()]
         if not subjects:
-            print(s("need_subject"), file=sys.stderr)
+            emit(s("need_subject"), sys.stderr)
             return 1
         tasks += [{"t": x, "s": "todo"} for x in subjects]
     elif cmd == "go":
         idx = pick(tasks, rest)
         if not idx:
-            print(s("need_number", "go"), file=sys.stderr)
+            emit(s("need_number", "go"), sys.stderr)
             return 1
         target = tasks[idx[0]]
         for t in tasks:
@@ -389,7 +451,7 @@ def main():
     elif cmd == "ok":
         idx = pick(tasks, rest)
         if not idx:
-            print(s("need_number", "ok"), file=sys.stderr)
+            emit(s("need_number", "ok"), sys.stderr)
             return 1
         for i in idx:
             tasks[i]["s"] = "done"
@@ -407,7 +469,7 @@ def main():
     elif cmd == "rm":
         idx = pick(tasks, rest)
         if not idx:
-            print(s("need_number", "rm"), file=sys.stderr)
+            emit(s("need_number", "rm"), sys.stderr)
             return 1
         drop = set(idx)
         tasks = [t for i, t in enumerate(tasks) if i not in drop]
@@ -417,14 +479,14 @@ def main():
     elif cmd == "new":
         tasks = []
     elif cmd != "ls":
-        print(s("unknown", cmd) + "\n", file=sys.stderr)
-        print(USAGE, end="", file=sys.stderr)
+        emit(s("unknown", cmd) + "\n", sys.stderr)
+        emit(USAGE, sys.stderr, end="")
         return 1
 
     save(tasks)
-    print(render(tasks))
+    emit(render(tasks))
     if shifted:
-        print(s("shifted"))
+        emit(s("shifted"))
     return 0
 
 
