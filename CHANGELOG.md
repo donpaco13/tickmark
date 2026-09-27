@@ -16,38 +16,14 @@ follow [SemVer](https://semver.org/).
 - `AGENTS.md` states the "your CLI may already have a checklist" condition as
   its first rule, and caps the list at six steps.
 
-### In progress, not merged
+### Fixed
 
-The first install by someone other than the author — Maxence, on Windows 11 and
-PowerShell, watching Antigravity CLI (`agy`) work a real project — turned up six
-defects. He patched them locally rather than drop the tool. Three workstreams
-are folding the fixes back in; the items below describe what is broken today.
-
-Windows:
-
-- `install.sh` is a POSIX shell script, so Windows has no supported install
-  path. `tk` has to be put on `PATH` by hand.
-- Console output raises `UnicodeEncodeError` on a cp1252 code page — `tk` never
-  reconfigures `sys.stdout` to UTF-8 — and a status line that crashes in the
-  background just renders empty, with no error anywhere.
-
-Core:
-
-- `project_root()` shells out to `git rev-parse --show-toplevel` and falls back
-  to `os.getcwd()` when that fails. With `git` missing from `PATH`, common on
-  Windows, the fallback is silent, so walking into a subdirectory quietly moves
-  the agent onto a different list.
-
-Status line:
-
-- `integrations/tk-status.py` shows one task: it picks a single entry with
-  `next()` and cuts it at `MAX_LABEL = 40`. Finished and upcoming steps are
-  invisible.
-- Under `--stdin-json` it reads `cwd` and discards the rest of the host's
-  payload, so the CLI's own status line — model, quota, reset, context use —
-  vanishes behind it.
-- It assumes a status line is one condensed line, with no way to draw the
-  checklist vertically under the prompt.
+- Added a supported PowerShell install path for Windows and kept installers
+  from changing an agent's native task or status configuration.
+- Made command and status-line output resilient to legacy Windows console
+  encodings, malformed stored entries, missing `git`, and corrupt timestamps.
+- Made the status-line integration preserve the host's session segments and
+  render the full checklist by default, with `--compact` for one-line hosts.
 
 ## [1.0.0] - 2026-09-14
 
