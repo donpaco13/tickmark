@@ -19,6 +19,8 @@ jobs:
           # half of that, and the pty tests exercise a different tty stack.
           - os: macos-latest
             python: "3.13"
+          - os: windows-latest
+            python: "3.13"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,3 +28,33 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: run the test suite
         run: python -m unittest discover -s tests -v
+      - name: smoke-test PowerShell installer
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $bin = Join-Path $env:RUNNER_TEMP "tickmark-bin"
+          $store = Join-Path $env:RUNNER_TEMP "tickmark-store"
+          New-Item -ItemType Directory -Force -Path $bin, $store | Out-Null
+
+          # Pre-seed the user PATH so the installer sees the temporary bin as
+          # already present, then restore the original value even on failure.
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          $seededPath = if ($userPath) { "$userPath;$bin" } else { $bin }
+          [Environment]::SetEnvironmentVariable('Path', $seededPath, 'User')
+          try {
+            $env:TICKMARK_BIN = $bin
+            $env:TICKMARK_STORE = $store
+            ./install.ps1
+
+            $installed = Join-Path $bin 'tk.cmd'
+            if (-not (Test-Path -LiteralPath $installed)) {
+              throw "Installer did not create $installed"
+            }
+            & $installed add 'installer smoke test'
+            if ($LASTEXITCODE -ne 0) {
+              throw "Installed tk.cmd exited with code $LASTEXITCODE"
+            }
+          }
+          finally {
+            [Environment]::SetEnvironmentVariable('Path', $userPath, 'User')
+          }
