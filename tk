@@ -293,7 +293,16 @@ def save(tasks):
     tmp = "%s.%d.tmp" % (p, os.getpid())
     with open(tmp, "w") as f:
         json.dump(tasks, f, ensure_ascii=False)
-    os.replace(tmp, p)
+    # Windows can briefly reject replacing a file that another process has
+    # open for reading. Keep the atomic replace, but let that reader finish.
+    for attempt in range(100):
+        try:
+            os.replace(tmp, p)
+            break
+        except PermissionError:
+            if attempt == 99:
+                raise
+            time.sleep(0.01)
 
 
 def encodable(text, stream):

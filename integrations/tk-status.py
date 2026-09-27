@@ -148,9 +148,18 @@ def resolve_root(cwd):
         return None
     if not isinstance(roots, dict):
         return None
-    path = os.path.normpath(cwd)
+    # Windows paths are case-insensitive, but roots.json stores the spelling
+    # returned by the process that first ran tk. Normalize both sides so a
+    # status-line child can find the same project after checkout/path casing
+    # changes.
+    normalized = {
+        os.path.normcase(os.path.normpath(key)): value
+        for key, value in roots.items()
+        if isinstance(key, str)
+    }
+    path = os.path.normcase(os.path.normpath(cwd))
     while True:
-        root = roots.get(path)
+        root = normalized.get(path)
         if isinstance(root, str):
             return root
         parent = os.path.dirname(path)
