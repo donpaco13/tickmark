@@ -234,8 +234,12 @@ class Rendering(Base):
     def tty_render(self, tasks, **env):
         stdout = mock.MagicMock(wraps=sys.stdout)
         stdout.isatty.return_value = True
+        # Do not inherit a global NO_COLOR setting from the developer shell.
+        variables = dict(os.environ)
+        variables.pop("NO_COLOR", None)
+        variables.update(env)
         with mock.patch.object(sys, "stdout", stdout), \
-                mock.patch.dict(os.environ, env, clear=False):
+                mock.patch.dict(os.environ, variables, clear=True):
             return self.tk.render(tasks)
 
     def test_colour_on_a_terminal(self):
@@ -536,7 +540,9 @@ class StoreRobustness(Base):
     def test_malformed_entries_are_dropped_not_crashed_on(self):
         self.write_store(json.dumps(
             [{"t": "good", "s": "todo"}, 42, {"t": "no state"},
-             {"s": "todo"}, {"t": "bad state", "s": "wat"}]))
+             {"s": "todo"}, {"t": "bad state", "s": "wat"},
+             {"t": "bad list", "s": []},
+             {"t": "bad object", "s": {"doing": True}}]))
         self.assertEqual(self.tk.load(), [{"t": "good", "s": "todo"}])
         out = self.run_tk().stdout
         self.assertIn("good", out)
@@ -1217,7 +1223,21 @@ class StatusLineDuration(Base):
                        "since": int(time.time()) - 3600 * 8 - 60 * 7}])
         code, out = self.run_status()
         self.assertEqual(code, 0)
-        self.assertEqual(out.strip(), "0/1 \u25b8 b 8h07m")
+        self.assertEqual(out.strip(), "0/1\n\u25b8 1 b  8h07m")
+
+    def test_compact_flag_keeps_a_one_line_status_segment(self):
+        self.tk.save([{"t": "b", "s": "doing",
+                       "since": int(time.time()) - 134}])
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, clear=False), \
+                mock.patch.object(sys, "argv",
+                                  ["tk-status.py", self.work, "--compact"]), \
+                contextlib.redirect_stdout(out):
+            for var in self.AMBIENT_IDENTITY_VARS:
+                os.environ.pop(var, None)
+            code = self.status.main()
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue().strip(), "0/1 \u25b8 b 2m14s")
 
     def test_no_store_is_silence_and_a_zero_exit(self):
         code, out = self.run_status()
@@ -1234,7 +1254,50 @@ class StatusLineDuration(Base):
         self.tk.save([{"t": "b", "s": "doing", "since": {"not": "a time"}}])
         code, out = self.run_status()
         self.assertEqual(code, 0)
-        self.assertEqual(out.strip(), "0/1 \u25b8 b")
+        self.assertEqual(out.strip(), "0/1\n\u25b8 1 b")
+
+    def test_future_timestamp_is_clamped_to_zero(self):
+        self.assertEqual(
+            self.status.render([{"t": "b", "s": "doing",
+                                 "since": BASE + 60}], multiline=True,
+                               now=BASE),
+            "0/1\n\u25b8 1 b  0s")
+
+    def test_malformed_tasks_are_ignored_by_the_counter_and_render(self):
+        tasks = [{"s": "done"}, "junk", None,
+                 {"t": "bad list", "s": []},
+                 {"t": "bad object", "s": {"doing": True}},
+                 {"t": "usable", "s": "todo"}]
+        self.assertEqual(self.status.render(tasks, multiline=True, now=BASE),
+                         "0/1\n\u25cb 1 usable")
+
+    def test_entirely_malformed_list_produces_no_status(self):
+        self.tk.save([{"s": "done"}, "junk", None])
+        self.assertEqual(self.run_status(), (0, ""))
+
+    def test_long_list_keeps_the_active_task_and_fold_counts(self):
+        tasks = [{"t": "step %d" % i, "s": "done"} for i in range(12)]
+        tasks.append({"t": "current", "s": "doing", "since": BASE})
+        tasks.extend({"t": "step %d" % i, "s": "todo"}
+                     for i in range(13, 24))
+        lines = self.status.render(tasks, multiline=True, now=BASE).splitlines()
+        self.assertEqual(lines[0], "12/24")
+        self.assertIn("\u25b8 13 current  0s", lines)
+        self.assertEqual(lines[1], "\u22ef +10 done")
+        self.assertEqual(lines[-1], "\u22ef +8 todo")
+
+    def test_ascii_mode_keeps_the_multiline_list_readable(self):
+        with mock.patch.dict(os.environ, {"TK_STATUS_ASCII": "1"}):
+            out = self.status.render([{"t": "ready", "s": "done"},
+                                      {"t": "next", "s": "todo"}],
+                                     multiline=True, now=BASE)
+        self.assertEqual(out, "1/2\nx 1 ready\no 2 next")
+        self.assertTrue(out.isascii())
+
+    def test_compact_mode_with_no_active_task_is_counter_only(self):
+        self.assertEqual(
+            self.status.render([{"t": "finished", "s": "done"}], now=BASE),
+            "1/1")
 
 
 if __name__ == "__main__":

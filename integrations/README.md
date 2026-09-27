@@ -1,6 +1,6 @@
 # Status line integrations
 
-`tk-status.py` is the shared engine behind every integration below. It reads
+`tk-status.py` is the shared engine behind every status line adapter below. It reads
 `roots.json` and the project's state file straight from the tickmark store —
 it never runs `git` or `tk`, so a status line can repaint every second at
 effectively zero cost. On a missing store, an unknown directory, an empty
@@ -9,25 +9,26 @@ traceback is worse than no status line.
 
 ## What it renders
 
-One line by default, which is the shape tmux and a p10k segment can take:
+Multiline by default, which is the view intended for an agent status area:
 
 ```
-2/5 ▸ Lancer le scan zero-token des portails … 43s
+Gemini 3.8 Flash │ 5h 72% (reset 3h24m) │ W 92% │ ctx 11% │ 2/5
+✔ 1 Define the trial experience  2m30s
+✔ 2 Build the signup flow  6m12s
+▸ 3 Check the empty state  43s
+○ 4 Test the upgrade path
+○ 5 Prepare release notes
 ```
 
-With `--multiline`, the whole checklist, which is the point of having one:
+Use `--compact` for a one-line shell segment such as tmux, starship or
+powerlevel10k:
 
 ```
-Gemini 3.8 Flash (High) │ 5h 72% (reset 3h24m) │ W 92% │ ctx 11% │ 2/5
-✔ 1 Configurer filtres stages trading & structuration  2m30s
-✔ 2 Integrer les 23 firmes quant & market making dans portals.yml  6m12s
-▸ 3 Lancer le scan zero-token des portails (scan.mjs)  43s
-○ 4 Trier et presenter les offres de stage retenues
-○ 5 Generer les CVs adaptes aux meilleures offres
+2/5 ▸ Check the empty state 43s
 ```
 
-The header carries what your CLI's own status line was showing before tk
-replaced it, read from the session JSON on stdin (`--stdin-json`): model
+The header carries what the host's own status line was showing, read from the
+session JSON on stdin (`--stdin-json`): model
 name, quota buckets, context window, then the task counter. Adopting tk
 should not cost you the quota reading you steer the session by. A host that
 sends no quota gets no quota segment, and the header disappears entirely
@@ -44,12 +45,12 @@ end:
 ```
 6/14
 ⋯ +4 done
-✔ 5 etape 5  2m08s
-✔ 6 etape 6  2m25s
-▸ 7 [Scanner] Lancer le scan zero-token des portails  43s
-○ 8 etape 8
-○ 9 etape 9
-○ 10 etape 10
+✔ 5 Review the product copy  2m08s
+✔ 6 Update the release notes  2m25s
+▸ 7 [Scanner] Scan the product sources  43s
+○ 8 Review the matches
+○ 9 Prepare the report
+○ 10 Publish the summary
 ⋯ +4 todo
 ```
 
@@ -61,11 +62,12 @@ only when the store has one.
 | Flag | Effect |
 |---|---|
 | `--stdin-json` | Read the session JSON the CLI feeds its status line. The working directory comes from it (`cwd`, or `workspace.current_dir`), and so do the header segments. |
-| `--multiline` | Render the full checklist instead of one compacted line. Only for hosts that accept several lines. |
+| `--multiline` | Explicitly request the default full progress list. |
+| `--compact` | Render one line for tmux, starship and powerlevel10k. |
 | `--color` / `--no-color` | Force ANSI on or off. |
 | `<path>` | Use this directory instead of `$PWD`. |
 
-Color is **on** under `--multiline` and off otherwise, because tmux and
+Color is **on** in multiline mode and off in compact mode, because tmux and
 starship apply their own and would print raw escape codes. `TK_STATUS_COLOR=1`
 or `=0` overrides that, and `NO_COLOR` turns it off everywhere. `isatty()` is
 deliberately not the test: a status line command is a child process whose
@@ -93,24 +95,11 @@ installs `tk` itself, not this folder, so either keep your clone of this repo
 around and point at `integrations/tk-status.py` inside it, or copy
 `tk-status.py` next to the `tk` binary (`~/.local/bin` by default).
 
-### 1. Claude Code
+These adapters are for shells, prompts and CLIs without a progress view that
+is already visible to the person watching. They add Tickmark to the host's
+status area and do not replace a native task view.
 
-Claude Code's `statusLine` sends session JSON — `cwd`, `model`,
-`context_window`, `cost` — on stdin, and accepts several lines back. Paste
-into `~/.claude/settings.json` (or a project's `.claude/settings.json`):
-
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "python3 /absolute/path/to/tickmark/integrations/tk-status.py --stdin-json --multiline"
-  }
-}
-```
-
-Drop `--multiline` for the one-line form.
-
-### 2. Antigravity CLI (`agy`)
+### 1. Antigravity CLI (`agy`)
 
 Same contract, and its payload also carries `quota` and `terminal_width`, so
 the header shows the 5h and weekly buckets. In
@@ -119,7 +108,7 @@ the header shows the 5h and weekly buckets. In
 ```json
 {
   "statusLine": {
-    "command": "python3 /absolute/path/to/tickmark/integrations/tk-status.py --stdin-json --multiline",
+    "command": "python3 /absolute/path/to/tickmark/integrations/tk-status.py --stdin-json",
     "enabled": true
   }
 }
@@ -130,7 +119,7 @@ forces its own stdout to UTF-8, so the marks and accented subjects survive a
 console still on code page 1252; if the stream refuses UTF-8 it falls back to
 ASCII marks rather than going blank.
 
-### 3. starship
+### 2. starship
 
 starship runs a custom module's command in the shell's current directory, so
 no `--stdin-json` or path argument is needed. Paste into
@@ -138,24 +127,24 @@ no `--stdin-json` or path argument is needed. Paste into
 
 ```toml
 [custom.tk]
-command = "python3 /absolute/path/to/tickmark/integrations/tk-status.py"
+command = "python3 /absolute/path/to/tickmark/integrations/tk-status.py --compact"
 when = true
 shell = ["sh", "-c"]
 ```
 
-### 4. tmux
+### 3. tmux
 
 `#()` in tmux runs a shell command; nesting `#{pane_current_path}` gives it
 the active pane's directory instead of tmux's own. Paste into `~/.tmux.conf`:
 
 ```tmux
-set -g status-right '#(cd #{pane_current_path} && python3 /absolute/path/to/tickmark/integrations/tk-status.py) | %H:%M'
+set -g status-right '#(cd #{pane_current_path} && python3 /absolute/path/to/tickmark/integrations/tk-status.py --compact) | %H:%M'
 ```
 
 (`%H:%M` is a placeholder for whatever you already have in `status-right` —
 keep your existing content and just prepend the `#(...)` part.)
 
-### 5. powerlevel10k
+### 4. powerlevel10k
 
 p10k segments are zsh functions, not command strings, so this is the one
 integration with its own file: `p10k-segment.zsh` defines `prompt_tk`. Source
@@ -172,12 +161,11 @@ By default the function looks for the engine at `~/.local/bin/tk-status.py`
 
 ## Testing notes
 
-`python3 tk-status.py --selftest` runs the built-in assertions: the
-single-line output is byte-for-byte what it was before the header existed,
-the store's new `elapsed_seconds` and `agent` fields are additive, both quota
+`python3 tk-status.py --selftest` runs the built-in assertions: compact output
+remains stable, the store's new `elapsed_seconds` and `agent` fields are additive, both quota
 buckets and the context window reach the header, each color threshold fires,
-the window past 8 tasks folds the right counts, and malformed tasks render as
-a counter instead of a traceback.
+the window past 8 tasks folds the right counts, and malformed tasks are ignored
+instead of causing a traceback.
 
 Beyond that, every render above is a real run against a populated store. The
 failure paths were run too — absent store, unknown directory, corrupt
@@ -187,8 +175,8 @@ and a session JSON whose `model`, `quota` and `context_window` are the wrong
 types. All print nothing (or just the task line) and exit `0`. The
 non-UTF-8 fallback was checked with `LC_ALL=C PYTHONIOENCODING=ascii:replace`.
 
-The session JSON shapes are taken from the two hosts as they ship, not
-guessed: Claude Code 2.1.70's status line payload and Antigravity CLI's
+The session JSON shape is taken from the host as it ships, not guessed:
+Antigravity CLI's
 (`model.display_name`, `quota["gemini-5h"|"3p-5h"].remaining_fraction` and
 `.reset_in_seconds`, `context_window.total_input_tokens` /
 `.context_window_size`, `terminal_width`). Unknown keys are ignored and

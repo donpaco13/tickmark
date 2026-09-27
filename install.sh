@@ -23,26 +23,7 @@ case ":$PATH:" in
 esac
 
 echo
-echo "Next: paste AGENTS.md into the instruction file your agent reads."
-echo
-
-found=0
-for f in \
-  "$HOME/.claude/CLAUDE.md" \
-  "$HOME/.codex/AGENTS.md" \
-  "$HOME/.config/opencode/AGENTS.md" \
-  "$HOME/.gemini/GEMINI.md" \
-  "$HOME/.config/crush/CRUSH.md" \
-  "$HOME/.aider.conf.yml"
-do
-  if [ -e "$f" ]; then
-    echo "  found  $f"
-    found=1
-  fi
-done
-[ "$found" -eq 1 ] || echo "  (no known agent instruction file found — see the README)"
-
-echo
-echo "  cat $SRC/AGENTS.md >> <that file>"
+echo "Next: use AGENTS.md only with a CLI that has no native progress view."
+echo "  See README.md for the integration rule and the CLI-specific location."
 echo
 echo "Then check it works:  tk add \"first step\" && tk"

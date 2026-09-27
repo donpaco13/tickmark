@@ -12,7 +12,8 @@ Usage
   tk-status.py                 # cwd = $PWD or the process cwd
   tk-status.py <path>          # cwd = <path>
   tk-status.py --stdin-json    # read the CLI's session JSON on stdin
-  tk-status.py --stdin-json --multiline   # vertical checklist
+  tk-status.py --multiline     # vertical progress list (default)
+  tk-status.py --compact       # one-line prompt/status segment
 
 Flags
 -----
@@ -20,10 +21,9 @@ Flags
                  The working directory comes from it, and so does everything
                  the host would otherwise have shown in the bar it replaced:
                  model, quota buckets, context window.
-  --multiline    render the whole list, one task per line, instead of a
-                 single compacted line. Only for hosts that accept several
-                 lines (Claude Code, Antigravity CLI); tmux status-right and
-                 a p10k segment are one line by construction.
+  --multiline    explicitly request the whole progress list (the default).
+  --compact      render one compact line for hosts such as tmux, starship and
+                 powerlevel10k.
   --color / --no-color   force ANSI on or off. Default: on in --multiline,
                  off otherwise, because tmux and starship apply their own and
                  would print raw escapes. TK_STATUS_COLOR=1/0 and NO_COLOR
@@ -35,10 +35,10 @@ stdout the host captures and then paints itself, so isatty() is false exactly
 where color works. Inside a captured agent session it is false too, and there
 color would be noise. The flag is the only honest signal.
 
-Output, one line: "<model> | <quota> | <ctx> | <done>/<total> <mark> <task>
-<duration>" - the session segments only when a session JSON supplied them.
-Multiline: that same segment as a header, then one line per task, windowed
-around the active one past 8 tasks so the list never grows without bound.
+Default output is a header followed by one line per task, windowed around the
+active one past 8 tasks so the list never grows without bound. `--compact`
+renders "<model> | <quota> | <ctx> | <done>/<total> <mark> <task> <duration>"
+on one line.
 Empty output, exit 0, when there is nothing to show.
 """
 import hashlib
@@ -87,13 +87,15 @@ QUOTA_BUCKETS = [
 
 
 def parse_args(argv):
-    opts = {"stdin_json": False, "multiline": False, "color": None,
+    opts = {"stdin_json": False, "multiline": True, "color": None,
             "selftest": False, "path": None}
     for a in argv:
         if a == "--stdin-json":
             opts["stdin_json"] = True
         elif a == "--multiline":
             opts["multiline"] = True
+        elif a == "--compact":
+            opts["multiline"] = False
         elif a == "--color":
             opts["color"] = True
         elif a == "--no-color":
@@ -407,6 +409,13 @@ def window(tasks, active):
 def render(tasks, session=None, multiline=False, color=False, now=None):
     if not tasks:
         return ""
+    tasks = [task for task in tasks
+             if isinstance(task, dict)
+             and isinstance(task.get("s"), str)
+             and task["s"] in MARK_UTF8
+             and isinstance(task.get("t"), str)]
+    if not tasks:
+        return ""
     session = session or {}
     now = time.time() if now is None else now
     ascii_only = use_ascii()
@@ -523,13 +532,15 @@ def selftest():
     assert len(out) == 9, out
 
     # Junk in the store is not a traceback in the bar.
-    assert render([{"s": "done"}, "junk", None], now=t0) == "1/3"
+    assert render([{"s": "done"}, "junk", None], now=t0) == ""
     assert render([{"t": "x", "s": "doing", "since": "nope"}], now=t0) == "0/1 > x"
     print("ok")
     return 0
 
 
 if __name__ == "__main__":
+    if "--selftest" in sys.argv[1:]:
+        sys.exit(selftest())
     try:
         # Windows consoles default to a legacy code page, and a status line
         # that raises UnicodeEncodeError just goes blank. Ask for UTF-8; if

@@ -20,12 +20,9 @@ Run it once with:
 
 Flags
 -----
-  -SkipStatusLine   Don't touch Claude Code's settings.json even if found.
+  This installer copies Tickmark and does not edit an agent's native task or
+  status configuration.
 #>
-[CmdletBinding()]
-param(
-    [switch]$SkipStatusLine
-)
 
 $ErrorActionPreference = 'Stop'
 
@@ -119,122 +116,15 @@ if (Add-UserPathEntry -Dir $Bin) {
     Write-Step "$Bin is already on your user PATH."
 }
 
-# ---------------------------------------------------------------------------
-# 4. Detect agent instruction files (same global paths install.sh checks,
-#    Windows separators). Many CLIs -- Antigravity CLI (agy) included -- only
-#    read a project-local AGENTS.md instead; flag those separately rather
-#    than guess an unverified per-CLI folder layout.
-# ---------------------------------------------------------------------------
 Write-Host ""
-Write-Step "Next: paste AGENTS.md into the instruction file your agent reads."
-Write-Host ""
-
-$GlobalInstructionFiles = @(
-    (Join-Path $HOME '.claude\CLAUDE.md'),
-    (Join-Path $HOME '.codex\AGENTS.md'),
-    (Join-Path $HOME '.config\opencode\AGENTS.md'),
-    (Join-Path $HOME '.gemini\GEMINI.md'),
-    (Join-Path $HOME '.config\crush\CRUSH.md'),
-    (Join-Path $HOME '.aider.conf.yml')
-)
-
-$foundGlobal = $false
-foreach ($f in $GlobalInstructionFiles) {
-    if (Test-Path -LiteralPath $f) {
-        Write-Found $f
-        $foundGlobal = $true
-    }
-}
-
-$ProjectOnlyCli = @('agy')  # binaries whose instruction file is project-local, not global
-$foundProjectOnly = @()
-foreach ($cmd in $ProjectOnlyCli) {
-    if (Get-Command $cmd -ErrorAction SilentlyContinue) {
-        $foundProjectOnly += $cmd
-    }
-}
-foreach ($cmd in $foundProjectOnly) {
-    Write-Found "$cmd on PATH -- it reads a project-local AGENTS.md, not a file under `$HOME (see README's table)"
-}
-
-if (-not $foundGlobal -and $foundProjectOnly.Count -eq 0) {
-    Write-Host "  (no known agent instruction file found -- see the README)"
-}
-
-Write-Host ""
-Write-Host "  Get-Content `"$SrcDir\AGENTS.md`" | Add-Content <that file>"
+Write-Step "Next: use AGENTS.md only with a CLI that has no native progress view."
+Write-Host "  See README.md for the integration rule and the CLI-specific location."
 Write-Host ""
 Write-Step 'Then check it works:  tk add "first step" ; tk'
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Write-Host ""
-    Write-Warn "git was not found on PATH. tk falls back to the current directory for its project root instead of the git root, so its list can split across subfolders of the same repo."
-}
-
-# ---------------------------------------------------------------------------
-# 5. Claude Code statusLine -- the one integration in integrations/ with a
-#    documented, stable JSON contract, so it's the only one wired
-#    automatically. Never touched if -SkipStatusLine, if Claude Code isn't
-#    present, or if settings.json already points somewhere else (never
-#    clobber a user's existing customization).
-# ---------------------------------------------------------------------------
-$ClaudeDir = Join-Path $HOME '.claude'
-if (-not $SkipStatusLine -and (Test-Path -LiteralPath $ClaudeDir)) {
-    Write-Host ""
-    Write-Step "Claude Code detected -- wiring its status line to tk."
-
-    $StatusEngineSrc = Join-Path $SrcDir 'integrations\tk-status.py'
-    if (-not (Test-Path -LiteralPath $StatusEngineSrc)) {
-        Write-Miss "find integrations\tk-status.py next to this script -- skipping the status line."
-    } else {
-        $StatusEngineDst = Join-Path $Bin 'tk-status.py'
-        Copy-Item -LiteralPath $StatusEngineSrc -Destination $StatusEngineDst -Force
-
-        $Command = "$($Python.Cmd)$(if ($WrapperArgs) { " $WrapperArgs" }) `"$StatusEngineDst`" --stdin-json"
-        $SettingsPath = Join-Path $ClaudeDir 'settings.json'
-
-        $Settings = $null
-        $ParseFailed = $false
-        if (Test-Path -LiteralPath $SettingsPath) {
-            $raw = Get-Content -LiteralPath $SettingsPath -Raw
-            if ($raw.Trim()) {
-                try { $Settings = $raw | ConvertFrom-Json } catch { $ParseFailed = $true }
-            } else {
-                $Settings = [pscustomobject]@{}
-            }
-        } else {
-            $Settings = [pscustomobject]@{}
-        }
-
-        if ($ParseFailed) {
-            Write-Miss "parse $SettingsPath (invalid JSON) -- left it untouched. Add this by hand:"
-            Write-Host "    `"statusLine`": { `"type`": `"command`", `"command`": `"$Command`" }"
-        } else {
-            $already = $Settings.PSObject.Properties['statusLine'] -and
-                       $Settings.statusLine.PSObject.Properties['command'] -and
-                       $Settings.statusLine.command -eq $Command
-            $ownedByOther = $Settings.PSObject.Properties['statusLine'] -and -not $already
-
-            if ($already) {
-                Write-Step "  $SettingsPath already points at tk-status.py -- nothing to change."
-            } elseif ($ownedByOther) {
-                Write-Warn "$SettingsPath already has a different statusLine -- left it as-is. To use tk instead, set:"
-                Write-Host "    `"statusLine`": { `"type`": `"command`", `"command`": `"$Command`" }"
-            } else {
-                $BackupPath = "${SettingsPath}.bak"
-                if ((Test-Path -LiteralPath $SettingsPath -PathType Leaf) -and -not (Test-Path -LiteralPath $BackupPath)) {
-                    Copy-Item -LiteralPath $SettingsPath -Destination $BackupPath
-                }
-                $Settings | Add-Member -NotePropertyName statusLine -NotePropertyValue ([pscustomobject]@{
-                    type    = 'command'
-                    command = $Command
-                }) -Force
-                $json = $Settings | ConvertTo-Json -Depth 20
-                [System.IO.File]::WriteAllText($SettingsPath, $json, [System.Text.UTF8Encoding]::new($false))
-                Write-Step "  Wired $SettingsPath -> tk-status.py (backup at $BackupPath if one didn't already exist)"
-            }
-        }
-    }
+    Write-Warn "git was not found on PATH. tk looks for a project marker in parent directories; without one, lists can split across subfolders."
 }
 
 Write-Host ""

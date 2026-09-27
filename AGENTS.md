@@ -1,9 +1,12 @@
-# Session task tracking
+# Human-facing session progress
 
-**Before doing anything else on a task with more than one step, run `tk add` with
-the steps.** Then keep it current as you go. This is the checklist the person
-watching reads to see where the work is; a narrated recap at the end does not
-replace it.
+If the CLI already exposes a native task or progress list to the person
+watching, use that native list and ignore this file. Tickmark is for CLIs that
+do not expose that progress visibly.
+
+For a task with more than one step, run `tk add` with the steps before starting
+work. Keep it current as you go. This is the progress display the person
+watching reads; a narrated recap at the end does not replace it.
 
 ```
 tk add "<step>" "<step>" "<step>"   lay out the steps, before starting work
@@ -15,8 +18,6 @@ tk                                  reprint the list
 
 Rules:
 
-- If this CLI already prints a live checklist of its own, use that one and
-  ignore the rest of this file. Two lists side by side are worse than one.
 - **Never mark a step done in the command that performs it.** `tk ok 3` inside
   the command running the test claims the step passed before the test has said
   anything. Either run the work first and mark it after, or gate the marking on

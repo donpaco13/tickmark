@@ -6,7 +6,7 @@
 
 function prompt_tk() {
   local out
-  out=$(python3 "${TK_STATUS_PY:-$HOME/.local/bin/tk-status.py}" 2>/dev/null)
+  out=$(python3 "${TK_STATUS_PY:-$HOME/.local/bin/tk-status.py}" --compact 2>/dev/null)
   [[ -z $out ]] && return
   p10k segment -f 208 -t "$out"
 }

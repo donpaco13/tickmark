@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tickmark (tk) - session task tracker for agent CLIs with no native todo tool.
+"""tickmark (tk) - human-facing session progress for CLIs with no native list.
 
 Why this exists
 ---------------
@@ -134,7 +134,7 @@ STRINGS = {
                 "had in mind."),
 }
 
-USAGE = """tickmark %s - session task tracker
+USAGE = """tickmark %s - human-facing session progress
 
   tk add "<subject>" ["<subject>" ...]   add one or more tasks
   tk go <n>                              mark task n as in progress
@@ -278,8 +278,8 @@ def load():
         return []
     # A hand-edited or half-written file must not crash the next command.
     return [t for t in data
-            if isinstance(t, dict) and t.get("s") in MARK
-            and isinstance(t.get("t"), str)]
+            if isinstance(t, dict) and isinstance(t.get("s"), str)
+            and t["s"] in MARK and isinstance(t.get("t"), str)]
 
 
 def save(tasks):
