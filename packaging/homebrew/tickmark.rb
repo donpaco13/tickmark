@@ -13,9 +13,9 @@
 class Tickmark < Formula
   desc "Live checklist for coding agents that don't have one"
   homepage "https://github.com/donpaco13/tickmark"
-  url "https://github.com/donpaco13/tickmark/releases/download/v1.0.0/tk"
-  version "1.0.0"
-  sha256 "fc5a0ff9007cd6280de4b4ea981ead1e96e43bba062ab8572d746143031935d3"
+  url "https://github.com/donpaco13/tickmark/releases/download/v1.1.0/tk"
+  version "1.1.0"
+  sha256 "1ff4c159fda094da0a91d94db47669be5ec6b2d84708f9fb72a58c800a21b2ee"
   license "MIT"
 
   def install
