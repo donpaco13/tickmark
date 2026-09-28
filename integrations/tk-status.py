@@ -158,10 +158,22 @@ def resolve_root(cwd):
         if isinstance(key, str)
     }
     path = os.path.normcase(os.path.normpath(cwd))
+
+    def equivalent(left, right):
+        try:
+            return os.path.samefile(left, right)
+        except (OSError, ValueError):
+            return os.path.normcase(os.path.abspath(left)) == \
+                os.path.normcase(os.path.abspath(right))
+
     while True:
         root = normalized.get(path)
         if isinstance(root, str):
             return root
+        for key, value in roots.items():
+            if isinstance(key, str) and isinstance(value, str) \
+                    and equivalent(path, key):
+                return value
         parent = os.path.dirname(path)
         if parent == path:
             return None

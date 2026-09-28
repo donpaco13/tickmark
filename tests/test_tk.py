@@ -152,6 +152,13 @@ class SaveIsAtomic(Base):
                     data = json.load(f)
             except FileNotFoundError:
                 continue
+            except PermissionError:
+                # Windows briefly denies a reader while another process
+                # atomically replaces the file. That is a transient lock,
+                # not a partially written JSON observation.
+                if os.name != "nt":
+                    raise
+                continue
             except json.JSONDecodeError as exc:
                 self.fail("reader saw a half-written file: %s" % exc)
             self.assertIsInstance(data, list)
