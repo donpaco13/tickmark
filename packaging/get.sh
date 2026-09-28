@@ -6,7 +6,7 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/donpaco13/tickmark/main/packaging/get.sh | sh
-#   TICKMARK_VERSION=1.0.0 curl -fsSL .../get.sh | sh   # pin a version
+#   TICKMARK_VERSION=1.1.0 curl -fsSL .../get.sh | sh   # pin a version
 set -eu
 
 REPO="donpaco13/tickmark"

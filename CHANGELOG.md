@@ -6,6 +6,8 @@ follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-28
+
 ### Changed
 
 - The README leads with who the tool is for, and answers Amp's case for
