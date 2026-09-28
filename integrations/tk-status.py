@@ -212,9 +212,9 @@ def use_ascii():
     locale = (os.environ.get("LC_ALL") or os.environ.get("LC_CTYPE")
               or os.environ.get("LANG") or "")
     if not locale:
-        # Windows consoles carry no LANG; the stdout encoding above already
-        # decided, and reconfigure() has made it UTF-8 whenever it could.
-        return not encoding
+        # Windows consoles carry no LANG. A real stream reports its code page;
+        # StringIO and other captures report no encoding and can carry UTF-8.
+        return bool(encoding)
     return "utf-8" not in locale.lower() and "utf8" not in locale.lower()
 
 
