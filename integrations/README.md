@@ -79,7 +79,7 @@ green above 50%, yellow under 25%, bold red under 10%, with the time before
 the bucket refills. The context percentage is what is **used**.
 
 Set `TK_STATUS_ASCII=1` to force the `o`/`>`/`x` marks; otherwise the script
-picks them up from a non-UTF-8 stdout or locale on its own.
+uses them when stdout reports a non-UTF-8 encoding.
 
 ## Wiring it up
 

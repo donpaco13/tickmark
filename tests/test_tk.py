@@ -1178,6 +1178,11 @@ class StatusLineDuration(Base):
         spec.loader.exec_module(self.status)
         self.status.STORE = self.store
 
+    def test_ascii_locale_does_not_downgrade_unicode_capture(self):
+        with mock.patch.dict(os.environ, {"LC_ALL": "C"}, clear=False), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(self.status.use_ascii())
+
     def run_status(self):
         """main() with the working directory passed as an argument.
 

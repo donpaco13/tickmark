@@ -207,15 +207,9 @@ def use_ascii():
     if os.environ.get("TK_STATUS_ASCII") == "1":
         return True
     encoding = getattr(sys.stdout, "encoding", None) or ""
-    if encoding and "utf" not in encoding.replace("-", "").lower():
-        return True
-    locale = (os.environ.get("LC_ALL") or os.environ.get("LC_CTYPE")
-              or os.environ.get("LANG") or "")
-    if not locale:
-        # Windows consoles carry no LANG. A real stream reports its code page;
-        # StringIO and other captures report no encoding and can carry UTF-8.
-        return bool(encoding)
-    return "utf-8" not in locale.lower() and "utf8" not in locale.lower()
+    # The stream determines what it can print. A captured StringIO has no
+    # encoding and accepts Unicode even when the process locale is ASCII.
+    return bool(encoding and "utf" not in encoding.replace("-", "").lower())
 
 
 def use_color(opts):
